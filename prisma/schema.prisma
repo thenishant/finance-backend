@@ -1,0 +1,102 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  // shadowDatabaseUrl = env("DATABASE_URL")
+}
+
+model User {
+  id                      String        @id @default(uuid())
+  email                   String        @unique
+  passwordHash            String
+  targetInvestmentPercent Int           @default(30)
+  accounts                Account[]
+  transactions            Transaction[]
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+  category                Category[]
+}
+
+enum AccountType {
+  SAVING
+  CURRENT
+  INVESTMENT
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  TRANSFER
+  INVESTMENT
+}
+
+model Account {
+  id               String        @id @default(uuid())
+  userId           String
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name             String
+  type             AccountType
+  balance          Float
+  transactionsFrom Transaction[] @relation("FromAccount")
+  transactionsTo   Transaction[] @relation("ToAccount")
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  deletedAt        DateTime?
+
+  @@index([userId])
+}
+
+model Category {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name String
+  type TransactionType
+
+  parentId String?
+  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children Category[] @relation("CategoryHierarchy")
+
+  transactions Transaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([parentId])
+}
+
+model Transaction {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  date   DateTime
+  type   TransactionType
+  amount Float
+
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id])
+
+  fromAccountId String?
+  toAccountId   String?
+
+  fromAccount Account? @relation("FromAccount", fields: [fromAccountId], references: [id])
+  toAccount   Account? @relation("ToAccount", fields: [toAccountId], references: [id])
+
+  note          String?
+  source        String  @default("manual")
+  externalRefId String?
+  isReconciled  Boolean @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  @@index([userId])
+  @@index([date])
+}
