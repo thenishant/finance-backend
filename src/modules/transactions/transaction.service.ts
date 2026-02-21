@@ -92,11 +92,12 @@ export const createTransaction = async (
             });
         }
 
-        const transaction = await tx.transaction.create({
+        return tx.transaction.create({
             data: {
                 userId,
                 type: data.type,
                 amount,
+                paymentMethod: data.paymentMethod,
                 date: new Date(data.date),
                 categoryId: data.categoryId,
                 fromAccountId: data.fromAccountId,
@@ -104,8 +105,6 @@ export const createTransaction = async (
                 note: data.note
             }
         });
-
-        return transaction;
     });
 };
 

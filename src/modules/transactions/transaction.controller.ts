@@ -2,14 +2,8 @@ import {NextFunction, Response} from "express";
 import {AuthRequest} from "../../shared/middleware/auth.middleware";
 import {createTransactionSchema} from "./transaction.dto";
 import {createTransaction, deleteTransaction, getTransactions, restoreTransaction} from "./transaction.service";
-import {prisma} from "../../database/prisma";
 
-// CREATE
-export const create = async (
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-) => {
+export const create = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const validated = createTransactionSchema.parse(req.body);
 
@@ -27,43 +21,8 @@ export const create = async (
     }
 };
 
-export const getAllTransactions = async (
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-) => {
-    try {
-        const transactions = await prisma.transaction.findMany({
-            where: {
-                userId: req.user!.userId,
-                deletedAt: null
-            },
-            include: {
-                category: true,
-                fromAccount: true,
-                toAccount: true
-            },
-            orderBy: {
-                date: "desc"
-            }
-        });
-
-        res.json({
-            success: true,
-            data: transactions
-        });
-
-    } catch (error) {
-        next(error);
-    }
-};
-
 // DELETE (Soft Delete + Reverse Balance)
-export const remove = async (
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-) => {
+export const remove = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const id = req.params.id;
 
@@ -85,11 +44,7 @@ export const remove = async (
 };
 
 // RESTORE
-export const restore = async (
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-) => {
+export const restore = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const id = req.params.id;
 
@@ -110,15 +65,11 @@ export const restore = async (
     }
 };
 
-export const getAll = async (
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-) => {
+export const getAllTransactions = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const transactions = await getTransactions(req.user!.userId);
 
-        res.json({
+        return res.json({
             success: true,
             data: transactions
         });

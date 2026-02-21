@@ -74,33 +74,28 @@ model Category {
   @@index([parentId])
 }
 
+enum PaymentMethod {
+  CASH
+  BANK
+  CREDIT_CARD
+}
+
 model Transaction {
-  id     String @id @default(uuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  date   DateTime
-  type   TransactionType
-  amount Float
-
-  categoryId String
-  category   Category @relation(fields: [categoryId], references: [id])
-
-  fromAccountId String?
-  toAccountId   String?
-
-  fromAccount Account? @relation("FromAccount", fields: [fromAccountId], references: [id])
-  toAccount   Account? @relation("ToAccount", fields: [toAccountId], references: [id])
-
+  id            String          @id @default(uuid())
+  amount        Float
+  type          TransactionType
+  paymentMethod PaymentMethod   @default(BANK)
+  date          DateTime
   note          String?
-  source        String  @default("manual")
-  externalRefId String?
-  isReconciled  Boolean @default(false)
-
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  deletedAt DateTime?
-
-  @@index([userId])
-  @@index([date])
+  userId        String
+  user          User            @relation(fields: [userId], references: [id])
+  categoryId    String?
+  category      Category?       @relation(fields: [categoryId], references: [id])
+  fromAccountId String?
+  fromAccount   Account?        @relation("FromAccount", fields: [fromAccountId], references: [id])
+  toAccountId   String?
+  toAccount     Account?        @relation("ToAccount", fields: [toAccountId], references: [id])
+  deletedAt     DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 }

@@ -1,26 +1,31 @@
 import {NextFunction, Response} from 'express';
-import {createAccountSchema} from './account.dto';
 import * as accountService from './account.service';
 import {AuthRequest} from '../../shared/middleware/auth.middleware';
+import {prisma} from "../../database/prisma";
 
 export const create = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
-        const validated = createAccountSchema.parse(req.body);
+        const name: string = req.body.name;
+        const initialBalance: number = Number(req.body.initialBalance ?? 0);
+        const type = req.body.type;
 
-        const account = await accountService.createAccount(
-            req.user!.userId,
-            validated
-        );
+        const account = await prisma.account.create({
+            data: {
+                name,
+                type,
+                balance: initialBalance ?? 0,
+                userId: req.user!.userId,
+            },
+        });
 
         res.status(201).json({
             success: true,
-            data: account
+            data: account,
         });
     } catch (error) {
         next(error);
     }
 };
-
 export const list = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const accounts = await accountService.getAccounts(req.user!.userId);
