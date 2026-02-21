@@ -5,19 +5,23 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  // shadowDatabaseUrl = env("DATABASE_URL")
+}
+
+enum AuthProvider {
+  EMAIL
+  GOOGLE
 }
 
 model User {
-  id                      String        @id @default(uuid())
-  email                   String        @unique
-  passwordHash            String
-  targetInvestmentPercent Int           @default(30)
-  accounts                Account[]
-  transactions            Transaction[]
-  createdAt               DateTime      @default(now())
-  updatedAt               DateTime      @updatedAt
-  category                Category[]
+  id           String        @id @default(uuid())
+  email        String        @unique
+  passwordHash String?
+  authProvider AuthProvider  @default(EMAIL)
+  accounts     Account[]
+  transactions Transaction[]
+  Category     Category[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 }
 
 enum AccountType {
