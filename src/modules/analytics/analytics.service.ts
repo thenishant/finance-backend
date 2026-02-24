@@ -243,7 +243,7 @@ export const getMonthlyComparison = async (
         const diff = curr - prev;
         const percent =
             prev === 0 ? null : Number(((diff / prev) * 100).toFixed(2));
-        return { diff, percent };
+        return {diff, percent};
     };
 
     return {

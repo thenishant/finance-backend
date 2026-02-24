@@ -1,12 +1,8 @@
 import {NextFunction, Response} from "express";
 import {AuthRequest} from "../../shared/middleware/auth.middleware";
-import {createCategorySchema, createCategoryWithChildrenSchema} from "./category.dto";
-import {createCategory, createCategoryWithChildren, getCategoryTree} from "./categories.service";
+import {createCategoryGroup, getCategoryTree} from "./categories.service";
+import {createCategoryGroupSchema} from "./category.dto";
 
-
-// ==========================
-// LIST TREE
-// ==========================
 export const list = async (
     req: AuthRequest,
     res: Response,
@@ -24,45 +20,16 @@ export const list = async (
     }
 };
 
-
-// ==========================
-// CREATE SINGLE
-// ==========================
-export const create = async (
-    req: AuthRequest,
-    res: Response,
-    next: NextFunction
-) => {
-    try {
-        const validated = createCategorySchema.parse(req.body);
-
-        const category = await createCategory(
-            req.user!.userId,
-            validated
-        );
-
-        return res.status(201).json({
-            success: true,
-            data: category
-        });
-    } catch (error) {
-        next(error);
-    }
-};
-
-
-// ==========================
-// BULK CREATE
-// ==========================
 export const createBulk = async (
     req: AuthRequest,
     res: Response,
     next: NextFunction
 ) => {
     try {
-        const validated = createCategoryWithChildrenSchema.parse(req.body);
+        const validated =
+            createCategoryGroupSchema.parse(req.body);
 
-        const parent = await createCategoryWithChildren(
+        const parent = await createCategoryGroup(
             req.user!.userId,
             validated
         );

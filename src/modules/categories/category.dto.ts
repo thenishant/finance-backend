@@ -1,17 +1,17 @@
 import {z} from "zod";
 
-export const createCategorySchema = z.object({
-    name: z.string().min(1),
-    type: z.enum(["INCOME", "EXPENSE"]),
-    parentId: z.string().optional()
+export const createCategoryGroupSchema = z.object({
+    name: z.string().trim().min(1, "Category name is required"),
+    type: z.enum([
+        "EXPENSE",
+        "INCOME",
+        "TRANSFER",
+        "INVESTMENT"
+    ]),
+    children: z
+        .array(z.string().trim().min(1))
+        .min(1, "At least one subcategory is required"),
 });
 
-export const createCategoryWithChildrenSchema = z.object({
-    name: z.string().min(1),
-    type: z.enum(["INCOME", "EXPENSE"]),
-    children: z.array(z.string()).optional()
-});
-
-export type CreateCategoryDTO = z.infer<typeof createCategorySchema>;
-export type CreateCategoryWithChildrenDTO =
-    z.infer<typeof createCategoryWithChildrenSchema>;
+export type CreateCategoryGroupDTO =
+    z.infer<typeof createCategoryGroupSchema>;

@@ -7,34 +7,34 @@ export const createTransaction = async (
 ) => {
     return prisma.$transaction(async (tx) => {
 
-        // 1️⃣ Validate category exists + belongs to user
-        const category = await tx.category.findFirst({
-            where: {
-                id: data.categoryId,
-                userId
-            },
-            include: {
-                children: true
+        const type = data.transactionType; // 🔥 mapping here
+
+        // 1️⃣ Validate category (only if provided)
+        let category = null;
+
+        if (data.categoryId) {
+            category = await tx.category.findFirst({
+                where: {
+                    id: data.categoryId,
+                    userId
+                },
+                include: {
+                    children: true
+                }
+            });
+
+            if (!category) {
+                throw new Error("Invalid category");
             }
-        });
 
-        if (!category) {
-            throw new Error("Invalid category");
+            if (category.type !== type) {
+                throw new Error("Category type does not match transaction type");
+            }
+
+            if (category.children.length > 0) {
+                throw new Error("Transactions must use a subcategory (leaf only)");
+            }
         }
-
-        // 2️⃣ Validate type match
-        if (category.type !== data.type) {
-            throw new Error("Category type does not match transaction type");
-        }
-
-        // 3️⃣ Enforce leaf-only
-        if (category.children.length > 0) {
-            throw new Error("Transactions must use a subcategory (leaf only)");
-        }
-
-        // ===============================
-        // Balance logic continues here
-        // ===============================
 
         const amount = data.amount;
 
@@ -50,7 +50,11 @@ export const createTransaction = async (
             })
             : null;
 
-        if (data.type === "EXPENSE") {
+        // ===============================
+        // Balance logic
+        // ===============================
+
+        if (type === "EXPENSE") {
             if (!fromAccount) throw new Error("Invalid from account");
 
             await tx.account.update({
@@ -59,7 +63,7 @@ export const createTransaction = async (
             });
         }
 
-        if (data.type === "INCOME") {
+        if (type === "INCOME") {
             if (!toAccount) throw new Error("Invalid to account");
 
             await tx.account.update({
@@ -68,7 +72,7 @@ export const createTransaction = async (
             });
         }
 
-        if (data.type === "TRANSFER") {
+        if (type === "TRANSFER") {
             if (!fromAccount || !toAccount)
                 throw new Error("Invalid accounts");
 
@@ -83,7 +87,7 @@ export const createTransaction = async (
             });
         }
 
-        if (data.type === "INVESTMENT") {
+        if (type === "INVESTMENT") {
             if (!fromAccount) throw new Error("Invalid account");
 
             await tx.account.update({
@@ -92,10 +96,11 @@ export const createTransaction = async (
             });
         }
 
+        // 🔥 IMPORTANT: map back to prisma field "type"
         return tx.transaction.create({
             data: {
                 userId,
-                type: data.type,
+                type, // <-- prisma field stays "type"
                 amount,
                 paymentMethod: data.paymentMethod,
                 date: new Date(data.date),

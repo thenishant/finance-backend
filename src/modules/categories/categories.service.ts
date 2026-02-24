@@ -1,107 +1,134 @@
 import {prisma} from "../../database/prisma";
-import {CreateCategoryDTO, CreateCategoryWithChildrenDTO} from "./category.dto";
+import {TransactionType} from "@prisma/client";
 
-
-// ==========================
-// GET TREE
-// ==========================
 export const getCategoryTree = async (userId: string) => {
+
     const categories = await prisma.category.findMany({
         where: {userId},
-        orderBy: {createdAt: "asc"}
+        orderBy: {name: "asc"}
     });
 
-    const parents = categories.filter(c => !c.parentId);
+    const parents = categories
+        .filter(c => !c.parentId)
+        .sort((a, b) =>
+            a.name.localeCompare(b.name)
+        );
 
     return parents.map(parent => ({
         id: parent.id,
         name: parent.name,
         type: parent.type,
-        createdAt: parent.createdAt,
-        updatedAt: parent.updatedAt,
         children: categories
             .filter(c => c.parentId === parent.id)
+            .sort((a, b) =>
+                a.name.localeCompare(b.name)
+            )
             .map(child => ({
                 id: child.id,
                 name: child.name,
                 type: child.type,
-                createdAt: child.createdAt,
-                updatedAt: child.updatedAt
+                parentId: child.parentId
             }))
     }));
 };
 
-
-// ==========================
-// CREATE SINGLE CATEGORY
-// ==========================
-export const createCategory = async (
+export const createCategoryGroup = async (
     userId: string,
-    data: CreateCategoryDTO
-) => {
-
-    if (data.parentId) {
-        const parent = await prisma.category.findFirst({
-            where: {
-                id: data.parentId,
-                userId
-            }
-        });
-
-        if (!parent) {
-            throw new Error("Invalid parent category");
-        }
-
-        // Enforce 2-level limit
-        if (parent.parentId !== null) {
-            throw new Error("Only two category levels allowed");
-        }
-
-        // Type must match parent
-        if (parent.type !== data.type) {
-            throw new Error("Subcategory type must match parent type");
-        }
+    data: {
+        name: string;
+        type: TransactionType;
+        children: string[];
     }
-
-    return prisma.category.create({
-        data: {
-            userId,
-            name: data.name,
-            type: data.type,
-            parentId: data.parentId ?? null
-        }
-    });
-};
-
-
-// ==========================
-// BULK CREATE (Parent + Children)
-// ==========================
-export const createCategoryWithChildren = async (
-    userId: string,
-    data: CreateCategoryWithChildrenDTO
 ) => {
+    const parentName = data.name.trim();
+
+    if (!parentName)
+        throw new Error("Category name required");
+
+    const normalizedParent = parentName.toLowerCase();
+
+    const children = data.children
+        .map(c => c.trim())
+        .filter(Boolean);
+
+    if (children.length === 0)
+        throw new Error("At least one subcategory required");
+
+    // Remove duplicate children ignoring case
+    const uniqueChildren = [
+        ...new Map(
+            children.map(c => [c.toLowerCase(), c])
+        ).values()
+    ];
+
     return prisma.$transaction(async (tx) => {
 
-        const parent = await tx.category.create({
-            data: {
+        /* =========================
+           1️⃣ Find parent ignoring case
+        ========================== */
+
+        let parent = await tx.category.findFirst({
+            where: {
                 userId,
-                name: data.name,
-                type: data.type
+                parentId: null,
+                type: data.type,
+                name: {
+                    equals: parentName,
+                    mode: "insensitive"
+                }
             }
         });
 
-        if (data.children?.length) {
-            for (const childName of data.children) {
-                await tx.category.create({
-                    data: {
-                        userId,
-                        name: childName,
-                        type: data.type,
-                        parentId: parent.id
-                    }
-                });
+        /* =========================
+           2️⃣ Create parent if missing
+        ========================== */
+
+        if (!parent) {
+            parent = await tx.category.create({
+                data: {
+                    userId,
+                    name: parentName,
+                    type: data.type
+                }
+            });
+        }
+
+        /* =========================
+           3️⃣ Fetch existing children
+        ========================== */
+
+        const existingChildren = await tx.category.findMany({
+            where: {
+                userId,
+                parentId: parent.id
             }
+        });
+
+        const existingLower = new Set(
+            existingChildren.map(c => c.name.toLowerCase())
+        );
+
+        /* =========================
+           4️⃣ Filter only new children
+        ========================== */
+
+        const newChildren = uniqueChildren.filter(
+            name => !existingLower.has(name.toLowerCase())
+        );
+
+        /* =========================
+           5️⃣ Insert new children
+        ========================== */
+
+        if (newChildren.length > 0) {
+            await tx.category.createMany({
+                data: newChildren.map(child => ({
+                    userId,
+                    name: child,
+                    type: data.type,
+                    parentId: parent!.id
+                }))
+            });
         }
 
         return parent;

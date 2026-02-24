@@ -7,21 +7,75 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum AuthProvider {
-  EMAIL
-  GOOGLE
-}
-
 model User {
   id           String        @id @default(uuid())
   email        String        @unique
   passwordHash String?
-  authProvider AuthProvider  @default(EMAIL)
-  accounts     Account[]
-  transactions Transaction[]
-  Category     Category[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
+  authProvider AuthProvider  @default(EMAIL)
+  accounts     Account[]
+  Category     Category[]
+  transactions Transaction[]
+}
+
+model Account {
+  id               String        @id @default(uuid())
+  userId           String
+  name             String
+  type             AccountType
+  balance          Float
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  deletedAt        DateTime?
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactionsFrom Transaction[] @relation("FromAccount")
+  transactionsTo   Transaction[] @relation("ToAccount")
+
+  @@index([userId])
+}
+
+model Category {
+  id          String          @id @default(uuid())
+  userId      String
+  name        String
+  type        TransactionType
+  parentId    String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  parent      Category?       @relation("CategoryToChildren", fields: [parentId], references: [id])
+  children    Category[]      @relation("CategoryToChildren")
+  User        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  Transaction Transaction[]
+
+  @@unique([userId, name], map: "unique_parent_group")
+  @@index([parentId])
+  @@index([userId])
+}
+
+model Transaction {
+  id            String          @id @default(uuid())
+  userId        String
+  date          DateTime
+  type          TransactionType
+  amount        Float
+  categoryId    String?
+  fromAccountId String?
+  toAccountId   String?
+  note          String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  deletedAt     DateTime?
+  paymentMethod PaymentMethod   @default(BANK)
+  category      Category?       @relation(fields: [categoryId], references: [id])
+  fromAccount   Account?        @relation("FromAccount", fields: [fromAccountId], references: [id])
+  toAccount     Account?        @relation("ToAccount", fields: [toAccountId], references: [id])
+  user          User            @relation(fields: [userId], references: [id])
+}
+
+enum AuthProvider {
+  EMAIL
+  GOOGLE
 }
 
 enum AccountType {
@@ -37,65 +91,8 @@ enum TransactionType {
   INVESTMENT
 }
 
-model Account {
-  id               String        @id @default(uuid())
-  userId           String
-  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name             String
-  type             AccountType
-  balance          Float
-  transactionsFrom Transaction[] @relation("FromAccount")
-  transactionsTo   Transaction[] @relation("ToAccount")
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
-  deletedAt        DateTime?
-
-  @@index([userId])
-}
-
-model Category {
-  id     String @id @default(uuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  name String
-  type TransactionType
-
-  parentId String?
-  parent   Category?  @relation("CategoryHierarchy", fields: [parentId], references: [id])
-  children Category[] @relation("CategoryHierarchy")
-
-  transactions Transaction[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([userId])
-  @@index([parentId])
-}
-
 enum PaymentMethod {
   CASH
   BANK
   CREDIT_CARD
-}
-
-model Transaction {
-  id            String          @id @default(uuid())
-  amount        Float
-  type          TransactionType
-  paymentMethod PaymentMethod   @default(BANK)
-  date          DateTime
-  note          String?
-  userId        String
-  user          User            @relation(fields: [userId], references: [id])
-  categoryId    String?
-  category      Category?       @relation(fields: [categoryId], references: [id])
-  fromAccountId String?
-  fromAccount   Account?        @relation("FromAccount", fields: [fromAccountId], references: [id])
-  toAccountId   String?
-  toAccount     Account?        @relation("ToAccount", fields: [toAccountId], references: [id])
-  deletedAt     DateTime?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
 }
