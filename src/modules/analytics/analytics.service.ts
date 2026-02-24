@@ -167,7 +167,9 @@ export const getTopSpendingCategories = async (
         take: 5
     });
 
-    const categoryIds = result.map(r => r.categoryId);
+    const categoryIds = result
+        .map(r => r.categoryId)
+        .filter((id): id is string => id !== null);
 
     const categories = await prisma.category.findMany({
         where: {id: {in: categoryIds}}
