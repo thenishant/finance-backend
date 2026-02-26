@@ -10,9 +10,7 @@ export const getCategoryTree = async (userId: string) => {
 
     const parents = categories
         .filter(c => !c.parentId)
-        .sort((a, b) =>
-            a.name.localeCompare(b.name)
-        );
+        .sort((a, b) => a.name.localeCompare(b.name));
 
     return parents.map(parent => ({
         id: parent.id,
@@ -20,9 +18,7 @@ export const getCategoryTree = async (userId: string) => {
         type: parent.type,
         children: categories
             .filter(c => c.parentId === parent.id)
-            .sort((a, b) =>
-                a.name.localeCompare(b.name)
-            )
+            .sort((a, b) => a.name.localeCompare(b.name))
             .map(child => ({
                 id: child.id,
                 name: child.name,
@@ -30,6 +26,27 @@ export const getCategoryTree = async (userId: string) => {
                 parentId: child.parentId
             }))
     }));
+};
+
+export const getLeafCategories = async (userId: string) => {
+
+    return prisma.category.findMany({
+        where: {
+            userId,
+            children: {none: {}}
+        },
+        include: {
+            parent: {
+                select: {
+                    id: true,
+                    name: true
+                }
+            }
+        },
+        orderBy: {
+            name: "asc"
+        }
+    });
 };
 
 export const createCategoryGroup = async (
@@ -40,21 +57,19 @@ export const createCategoryGroup = async (
         children: string[];
     }
 ) => {
+
     const parentName = data.name.trim();
 
     if (!parentName)
-        throw new Error("Category name required");
-
-    const normalizedParent = parentName.toLowerCase();
+        throw {status: 400, message: "Category name required"};
 
     const children = data.children
         .map(c => c.trim())
         .filter(Boolean);
 
     if (children.length === 0)
-        throw new Error("At least one subcategory required");
+        throw {status: 400, message: "At least one subcategory required"};
 
-    // Remove duplicate children ignoring case
     const uniqueChildren = [
         ...new Map(
             children.map(c => [c.toLowerCase(), c])
@@ -62,11 +77,6 @@ export const createCategoryGroup = async (
     ];
 
     return prisma.$transaction(async (tx) => {
-
-        /* =========================
-           1️⃣ Find parent ignoring case
-        ========================== */
-
         let parent = await tx.category.findFirst({
             where: {
                 userId,
@@ -79,10 +89,6 @@ export const createCategoryGroup = async (
             }
         });
 
-        /* =========================
-           2️⃣ Create parent if missing
-        ========================== */
-
         if (!parent) {
             parent = await tx.category.create({
                 data: {
@@ -92,10 +98,6 @@ export const createCategoryGroup = async (
                 }
             });
         }
-
-        /* =========================
-           3️⃣ Fetch existing children
-        ========================== */
 
         const existingChildren = await tx.category.findMany({
             where: {
@@ -108,17 +110,9 @@ export const createCategoryGroup = async (
             existingChildren.map(c => c.name.toLowerCase())
         );
 
-        /* =========================
-           4️⃣ Filter only new children
-        ========================== */
-
         const newChildren = uniqueChildren.filter(
             name => !existingLower.has(name.toLowerCase())
         );
-
-        /* =========================
-           5️⃣ Insert new children
-        ========================== */
 
         if (newChildren.length > 0) {
             await tx.category.createMany({
