@@ -6,8 +6,8 @@ const router = Router();
 
 router.use(authenticate);
 
-router.get("/categories", list);
-router.get("/categories/leaf", listLeaf);
-router.post("/categories/bulk", createBulk);
+router.get("/", list);
+router.get("/leaf", listLeaf);
+router.post("/bulk", createBulk);
 
 export default router;
