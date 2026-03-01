@@ -6,7 +6,6 @@ const router = Router();
 
 router.use(authenticate);
 
-router.get("/month", monthly);
 
 router.get("/month", monthly);
 router.get("/year", yearly);

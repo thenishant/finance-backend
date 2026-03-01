@@ -1,101 +1,94 @@
 import {prisma} from "../../database/prisma";
 
+const safeSum = (value: number | null | undefined): number =>
+    value ?? 0;
+
 export const getMonthlyAnalytics = async (
     userId: string,
     year: number,
     month: number
 ) => {
-
     const startDate = new Date(Date.UTC(year, month - 1, 1));
     const endDate = new Date(Date.UTC(year, month, 1));
 
-    const transactions = await prisma.transaction.findMany({
-        where: {
-            userId,
-            deletedAt: null,
-            date: {
-                gte: startDate,
-                lt: endDate
-            }
-        },
-        include: {
-            category: true
-        }
+    const [totals, breakdown] = await prisma.$transaction([
+        prisma.transaction.groupBy({
+            by: ["type"],
+            where: {
+                userId,
+                deletedAt: null,
+                date: {
+                    gte: startDate,
+                    lt: endDate,
+                },
+            },
+            _sum: {amount: true},
+            orderBy: {type: "asc"},
+        }),
+
+        prisma.transaction.groupBy({
+            by: ["categoryId"],
+            where: {
+                userId,
+                deletedAt: null,
+                type: "EXPENSE",
+                date: {
+                    gte: startDate,
+                    lt: endDate,
+                },
+            },
+            _sum: {amount: true},
+            orderBy: {
+                _sum: {amount: "desc"},
+            },
+        }),
+    ]);
+
+    const totalIncome =
+        safeSum(
+            totals.find((t) => t.type === "INCOME")?._sum?.amount
+        );
+
+    const totalExpense =
+        safeSum(
+            totals.find((t) => t.type === "EXPENSE")?._sum?.amount
+        );
+
+    const totalInvestment =
+        safeSum(
+            totals.find((t) => t.type === "INVESTMENT")?._sum?.amount
+        );
+
+    const categoryIds = breakdown
+        .map((b) => b.categoryId)
+        .filter((id): id is string => Boolean(id));
+
+    const categories = categoryIds.length
+        ? await prisma.category.findMany({
+            where: {id: {in: categoryIds}},
+            select: {id: true, name: true},
+        })
+        : [];
+
+    const expenseBreakdown = breakdown.map((b) => {
+        const category = categories.find(
+            (c) => c.id === b.categoryId
+        );
+
+        return {
+            category: category?.name ?? "Unknown",
+            total: safeSum(b._sum?.amount),
+            children: [],
+        };
     });
-
-    let totalIncome = 0;
-    let totalExpense = 0;
-    let totalInvestment = 0;
-
-    for (const trx of transactions) {
-        if (trx.type === "INCOME") totalIncome += trx.amount;
-        if (trx.type === "EXPENSE") totalExpense += trx.amount;
-        if (trx.type === "INVESTMENT") totalInvestment += trx.amount;
-    }
-
-    const expenseTransactions = transactions.filter(
-        trx => trx.type === "EXPENSE"
-    );
-
-    // Group by parent category
-    const breakdownMap: Record<string, any> = {};
-
-    for (const trx of expenseTransactions) {
-
-        const category = trx.category;
-
-        if (!category) continue;
-
-        // Get parent
-        const parentId = category.parentId ?? category.id;
-
-        if (!breakdownMap[parentId]) {
-            breakdownMap[parentId] = {
-                parentId,
-                parentName: "",
-                total: 0,
-                children: {}
-            };
-        }
-
-        breakdownMap[parentId].total += trx.amount;
-
-        if (!breakdownMap[parentId].children[category.id]) {
-            breakdownMap[parentId].children[category.id] = {
-                id: category.id,
-                name: category.name,
-                total: 0
-            };
-        }
-
-        breakdownMap[parentId].children[category.id].total += trx.amount;
-    }
-
-    // Fetch parent names
-    const parentIds = Object.keys(breakdownMap);
-
-    const parents = await prisma.category.findMany({
-        where: {
-            id: {in: parentIds}
-        }
-    });
-
-    for (const parent of parents) {
-        breakdownMap[parent.id].parentName = parent.name;
-    }
-
-    const expenseBreakdown = Object.values(breakdownMap).map((parent: any) => ({
-        category: parent.parentName,
-        total: parent.total,
-        children: Object.values(parent.children)
-    }));
 
     return {
         totalIncome,
         totalExpense,
         totalInvestment,
-        netSavings: totalIncome - totalExpense - totalInvestment,
-        expenseBreakdown
+        netSavings:
+            totalIncome - totalExpense - totalInvestment,
+        expenseBreakdown,
     };
 };
 
@@ -103,36 +96,44 @@ export const getYearlyAnalytics = async (
     userId: string,
     year: number
 ) => {
-
     const startDate = new Date(Date.UTC(year, 0, 1));
     const endDate = new Date(Date.UTC(year + 1, 0, 1));
 
-    const transactions = await prisma.transaction.findMany({
+    const totals = await prisma.transaction.groupBy({
+        by: ["type"],
         where: {
             userId,
             deletedAt: null,
             date: {
                 gte: startDate,
-                lt: endDate
-            }
-        }
+                lt: endDate,
+            },
+        },
+        _sum: {amount: true},
+        orderBy: {type: "asc"},
     });
 
-    let totalIncome = 0;
-    let totalExpense = 0;
-    let totalInvestment = 0;
+    const totalIncome =
+        safeSum(
+            totals.find((t) => t.type === "INCOME")?._sum?.amount
+        );
 
-    for (const trx of transactions) {
-        if (trx.type === "INCOME") totalIncome += trx.amount;
-        if (trx.type === "EXPENSE") totalExpense += trx.amount;
-        if (trx.type === "INVESTMENT") totalInvestment += trx.amount;
-    }
+    const totalExpense =
+        safeSum(
+            totals.find((t) => t.type === "EXPENSE")?._sum?.amount
+        );
+
+    const totalInvestment =
+        safeSum(
+            totals.find((t) => t.type === "INVESTMENT")?._sum?.amount
+        );
 
     return {
         totalIncome,
         totalExpense,
         totalInvestment,
-        netSavings: totalIncome - totalExpense - totalInvestment
+        netSavings:
+            totalIncome - totalExpense - totalInvestment,
     };
 };
 
@@ -141,7 +142,6 @@ export const getTopSpendingCategories = async (
     year: number,
     month: number
 ) => {
-
     const startDate = new Date(Date.UTC(year, month - 1, 1));
     const endDate = new Date(Date.UTC(year, month, 1));
 
@@ -153,34 +153,36 @@ export const getTopSpendingCategories = async (
             type: "EXPENSE",
             date: {
                 gte: startDate,
-                lt: endDate
-            }
+                lt: endDate,
+            },
         },
-        _sum: {
-            amount: true
-        },
+        _sum: {amount: true},
         orderBy: {
-            _sum: {
-                amount: "desc"
-            }
+            _sum: {amount: "desc"},
         },
-        take: 5
+        take: 5,
     });
 
     const categoryIds = result
-        .map(r => r.categoryId)
-        .filter((id): id is string => id !== null);
+        .map((r) => r.categoryId)
+        .filter((id): id is string => Boolean(id));
 
-    const categories = await prisma.category.findMany({
-        where: {id: {in: categoryIds}}
-    });
+    const categories = categoryIds.length
+        ? await prisma.category.findMany({
+            where: {id: {in: categoryIds}},
+            select: {id: true, name: true},
+        })
+        : [];
 
-    return result.map(r => {
-        const category = categories.find(c => c.id === r.categoryId);
+    return result.map((r) => {
+        const category = categories.find(
+            (c) => c.id === r.categoryId
+        );
+
         return {
             categoryId: r.categoryId,
             name: category?.name ?? "Unknown",
-            total: r._sum.amount ?? 0
+            total: safeSum(r._sum?.amount),
         };
     });
 };
@@ -190,10 +192,9 @@ export const getMonthlyComparison = async (
     year: number,
     month: number
 ) => {
-
     const getRange = (y: number, m: number) => ({
         start: new Date(Date.UTC(y, m - 1, 1)),
-        end: new Date(Date.UTC(y, m, 1))
+        end: new Date(Date.UTC(y, m, 1)),
     });
 
     const currentRange = getRange(year, month);
@@ -208,43 +209,58 @@ export const getMonthlyComparison = async (
 
     const previousRange = getRange(prevYear, prevMonth);
 
-    const aggregate = async (range: { start: Date; end: Date }) => {
-        const transactions = await prisma.transaction.findMany({
+    const aggregate = async (
+        range: { start: Date; end: Date }
+    ) => {
+        const totals = await prisma.transaction.groupBy({
+            by: ["type"],
             where: {
                 userId,
                 deletedAt: null,
                 date: {
                     gte: range.start,
-                    lt: range.end
-                }
-            }
+                    lt: range.end,
+                },
+            },
+            _sum: {amount: true},
+            orderBy: {type: "asc"},
         });
 
-        let income = 0;
-        let expense = 0;
-        let investment = 0;
+        const income =
+            safeSum(
+                totals.find((t) => t.type === "INCOME")?._sum?.amount
+            );
 
-        for (const trx of transactions) {
-            if (trx.type === "INCOME") income += trx.amount;
-            if (trx.type === "EXPENSE") expense += trx.amount;
-            if (trx.type === "INVESTMENT") investment += trx.amount;
-        }
+        const expense =
+            safeSum(
+                totals.find((t) => t.type === "EXPENSE")?._sum?.amount
+            );
+
+        const investment =
+            safeSum(
+                totals.find((t) => t.type === "INVESTMENT")?._sum?.amount
+            );
 
         return {
             totalIncome: income,
             totalExpense: expense,
             totalInvestment: investment,
-            netSavings: income - expense - investment
+            netSavings: income - expense - investment,
         };
     };
 
-    const current = await aggregate(currentRange);
-    const previous = await aggregate(previousRange);
+    const [current, previous] = await Promise.all([
+        aggregate(currentRange),
+        aggregate(previousRange),
+    ]);
 
     const calculateChange = (curr: number, prev: number) => {
         const diff = curr - prev;
         const percent =
-            prev === 0 ? null : Number(((diff / prev) * 100).toFixed(2));
+            prev === 0
+                ? null
+                : Number(((diff / prev) * 100).toFixed(2));
+
         return {diff, percent};
     };
 
@@ -252,13 +268,22 @@ export const getMonthlyComparison = async (
         current,
         previous,
         change: {
-            income: calculateChange(current.totalIncome, previous.totalIncome),
-            expense: calculateChange(current.totalExpense, previous.totalExpense),
+            income: calculateChange(
+                current.totalIncome,
+                previous.totalIncome
+            ),
+            expense: calculateChange(
+                current.totalExpense,
+                previous.totalExpense
+            ),
             investment: calculateChange(
                 current.totalInvestment,
                 previous.totalInvestment
             ),
-            savings: calculateChange(current.netSavings, previous.netSavings)
-        }
+            savings: calculateChange(
+                current.netSavings,
+                previous.netSavings
+            ),
+        },
     };
 };

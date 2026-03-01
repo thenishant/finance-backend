@@ -67,10 +67,16 @@ model Transaction {
   updatedAt     DateTime        @updatedAt
   deletedAt     DateTime?
   paymentMethod PaymentMethod   @default(BANK)
-  category      Category?       @relation(fields: [categoryId], references: [id])
-  fromAccount   Account?        @relation("FromAccount", fields: [fromAccountId], references: [id])
-  toAccount     Account?        @relation("ToAccount", fields: [toAccountId], references: [id])
-  user          User            @relation(fields: [userId], references: [id])
+
+  category    Category? @relation(fields: [categoryId], references: [id])
+  fromAccount Account?  @relation("FromAccount", fields: [fromAccountId], references: [id])
+  toAccount   Account?  @relation("ToAccount", fields: [toAccountId], references: [id])
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@index([userId, date])
+  @@index([userId, type])
+  @@index([userId, categoryId])
+  @@index([userId, deletedAt, date])
 }
 
 enum AuthProvider {

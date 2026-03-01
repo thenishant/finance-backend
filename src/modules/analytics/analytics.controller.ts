@@ -15,14 +15,6 @@ export const monthly = async (
     try {
         const year = Number(req.query.year);
         const month = Number(req.query.month);
-
-        if (!year || !month) {
-            return res.status(400).json({
-                success: false,
-                error: {message: "Year and month are required"}
-            });
-        }
-
         const data = await getMonthlyAnalytics(
             req.user!.userId,
             year,
@@ -31,7 +23,7 @@ export const monthly = async (
 
         return res.json({
             success: true,
-            data
+            data,
         });
 
     } catch (error) {
