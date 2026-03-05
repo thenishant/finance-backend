@@ -95,29 +95,25 @@ export const getMonthlyAnalytics = async (
     const expenseBreakdown = Object.values(parentMap);
 
     const goalPercent = goal?.goalPercent ?? null;
-
-    const goalAmount =
-        goalPercent !== null
-            ? (totalIncome * goalPercent) / 100
-            : null;
-
-    const progress =
-        goalAmount && goalAmount > 0
-            ? totalInvestment / goalAmount
-            : null;
+    const goalAmount = goalPercent !== null ? (totalIncome * goalPercent) / 100 : null;
+    const invested = totalInvestment;
+    const remaining = goalAmount !== null ? Math.max(goalAmount - invested, 0) : null;
+    const progress = goalAmount && goalAmount > 0 ? Number((invested / goalAmount).toFixed(2)) : null;
 
     return {
         totalIncome,
         totalExpense,
         totalInvestment,
         netSavings: totalIncome - totalExpense - totalInvestment,
-
-        investmentGoal: {
-            percent: goalPercent,
-            goalAmount,
-            progress
-        },
-
+        investmentGoal: goalPercent
+            ? {
+                percent: goalPercent,
+                goalAmount,
+                invested,
+                remaining,
+                progress
+            }
+            : null,
         expenseBreakdown
     };
 };
