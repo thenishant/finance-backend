@@ -8,6 +8,8 @@ export const createTransaction = async (
     return prisma.$transaction(async (tx) => {
 
         const type = data.transactionType;
+        const amount = data.amount;
+
         let category = null;
 
         if (data.categoryId) {
@@ -16,9 +18,7 @@ export const createTransaction = async (
                     id: data.categoryId,
                     userId
                 },
-                include: {
-                    children: true
-                }
+                include: {children: true}
             });
 
             if (!category) {
@@ -30,11 +30,9 @@ export const createTransaction = async (
             }
 
             if (category.children.length > 0) {
-                throw new Error("Transactions must use a subcategory (leaf only)");
+                throw new Error("Transactions must use a subcategory");
             }
         }
-
-        const amount = data.amount;
 
         const fromAccount = data.fromAccountId
             ? await tx.account.findFirst({
@@ -49,47 +47,61 @@ export const createTransaction = async (
             : null;
 
         // ===============================
+        // Validation
+        // ===============================
+
+        if (type === "EXPENSE" || type === "INVESTMENT") {
+            if (!fromAccount)
+                throw new Error("fromAccountId required");
+        }
+
+        if (type === "INCOME") {
+            if (!toAccount)
+                throw new Error("toAccountId required");
+        }
+
+        if (type === "TRANSFER") {
+            if (!fromAccount || !toAccount)
+                throw new Error("Both accounts required");
+
+            if (fromAccount.id === toAccount.id)
+                throw new Error("Cannot transfer to same account");
+        }
+
+        // ===============================
         // Balance logic
         // ===============================
 
         if (type === "EXPENSE") {
-            if (!fromAccount) throw new Error("Invalid from account");
-
             await tx.account.update({
-                where: {id: fromAccount.id},
+                where: {id: fromAccount!.id},
                 data: {balance: {decrement: amount}}
             });
         }
 
         if (type === "INCOME") {
-            if (!toAccount) throw new Error("Invalid to account");
-
             await tx.account.update({
-                where: {id: toAccount.id},
+                where: {id: toAccount!.id},
                 data: {balance: {increment: amount}}
             });
         }
 
         if (type === "TRANSFER") {
-            if (!fromAccount || !toAccount)
-                throw new Error("Invalid accounts");
 
             await tx.account.update({
-                where: {id: fromAccount.id},
+                where: {id: fromAccount!.id},
                 data: {balance: {decrement: amount}}
             });
 
             await tx.account.update({
-                where: {id: toAccount.id},
+                where: {id: toAccount!.id},
                 data: {balance: {increment: amount}}
             });
         }
 
         if (type === "INVESTMENT") {
-            if (!fromAccount) throw new Error("Invalid account");
-
             await tx.account.update({
-                where: {id: fromAccount.id},
+                where: {id: fromAccount!.id},
                 data: {balance: {decrement: amount}}
             });
         }
