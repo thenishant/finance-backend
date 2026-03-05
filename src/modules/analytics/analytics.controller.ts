@@ -12,9 +12,14 @@ export const monthly = async (
     res: Response,
     next: NextFunction
 ) => {
+    const label = `monthly-${Date.now()}`;
+
+    console.time(label);
+
     try {
         const year = Number(req.query.year);
         const month = Number(req.query.month);
+
         const data = await getMonthlyAnalytics(
             req.user!.userId,
             year,
@@ -23,10 +28,11 @@ export const monthly = async (
 
         return res.json({
             success: true,
-            data,
+            data
         });
 
     } catch (error) {
+        console.timeEnd(label);
         next(error);
     }
 };

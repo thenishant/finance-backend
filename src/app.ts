@@ -8,6 +8,7 @@ import accountRoutes from "./modules/accounts/account.routes";
 import transactionRoutes from "./modules/transactions/transaction.routes";
 import categoriesRoutes from "./modules/categories/categories.routes";
 import analyticsRoutes from "./modules/analytics/analytics.routes";
+import investmentRoutes from "./modules/investments/investment.routes";
 
 dotenv.config();
 
@@ -26,6 +27,7 @@ app.use('/accounts', accountRoutes);
 app.use('/transactions', transactionRoutes);
 app.use("/categories", categoriesRoutes);
 app.use("/analytics", analyticsRoutes);
+app.use("/investment", investmentRoutes);
 
 app.use(errorHandler);
 

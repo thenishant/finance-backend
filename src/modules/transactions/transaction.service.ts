@@ -7,9 +7,7 @@ export const createTransaction = async (
 ) => {
     return prisma.$transaction(async (tx) => {
 
-        const type = data.transactionType; // 🔥 mapping here
-
-        // 1️⃣ Validate category (only if provided)
+        const type = data.transactionType;
         let category = null;
 
         if (data.categoryId) {
@@ -95,15 +93,19 @@ export const createTransaction = async (
                 data: {balance: {decrement: amount}}
             });
         }
+        const date = new Date(data.date);
+        const year = date.getFullYear();
+        const month = date.getMonth() + 1;
 
-        // 🔥 IMPORTANT: map back to prisma field "type"
         return tx.transaction.create({
             data: {
                 userId,
-                type, // <-- prisma field stays "type"
+                type,
                 amount,
                 paymentMethod: data.paymentMethod,
-                date: new Date(data.date),
+                date,
+                year,
+                month,
                 categoryId: data.categoryId,
                 fromAccountId: data.fromAccountId,
                 toAccountId: data.toAccountId,
