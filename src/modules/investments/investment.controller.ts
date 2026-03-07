@@ -1,16 +1,20 @@
 import {Response} from "express";
-import {setMonthlyInvestmentGoal} from "./investment.service";
 import {AuthRequest} from "../../shared/middleware/auth.middleware";
+import {setInvestmentGoal} from "./investment.service";
 
-export const setInvestmentGoal = async (req: AuthRequest, res: Response) => {
+export const setGoal = async (
+    req: AuthRequest,
+    res: Response
+) => {
     try {
+
         const userId = req.user!.userId;
         const {year, month, goalPercent} = req.body;
 
-        if (!year || !month || goalPercent === undefined) {
+        if (!year || goalPercent === undefined) {
             return res.status(400).json({
                 success: false,
-                error: {message: "year, month and goalPercent are required"}
+                error: {message: "year and goalPercent are required"}
             });
         }
 
@@ -21,20 +25,30 @@ export const setInvestmentGoal = async (req: AuthRequest, res: Response) => {
             });
         }
 
-        const goal = await setMonthlyInvestmentGoal(
+        if (month && (month < 1 || month > 12)) {
+            return res.status(400).json({
+                success: false,
+                error: {message: "month must be between 1 and 12"}
+            });
+        }
+
+        const goal = await setInvestmentGoal(
             userId,
             Number(year),
-            Number(month),
-            Number(goalPercent)
+            Number(goalPercent),
+            month ? Number(month) : undefined
         );
 
-        res.json({
+        return res.json({
             success: true,
             data: goal
         });
 
     } catch (error) {
-        res.status(500).json({
+
+        console.error("setInvestmentGoal error:", error);
+
+        return res.status(500).json({
             success: false,
             error: {message: "Failed to set investment goal"}
         });

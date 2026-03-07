@@ -12,7 +12,7 @@ export const setInvestmentGoal = async (
             userId_year_month: {
                 userId,
                 year,
-                month: month ?? null
+                month: month ?? 0
             }
         },
         update: {
@@ -21,7 +21,7 @@ export const setInvestmentGoal = async (
         create: {
             userId,
             year,
-            month: month ?? null,
+            month: month ?? 0,
             goalPercent
         }
     });

@@ -109,7 +109,7 @@ model InvestmentGoal {
   id          String @id @default(uuid())
   userId      String
   year        Int
-  month       Int?
+  month       Int    @default(0)
   goalPercent Int
 
   createdAt DateTime @default(now())

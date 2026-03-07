@@ -1,9 +1,9 @@
 import {Router} from "express";
-import {setInvestmentGoal} from "./investment.controller";
 import {authenticate} from "../../shared/middleware/auth.middleware";
+import {setGoal} from "./investment.controller";
 
 const router = Router();
 
-router.post("/goal", authenticate, setInvestmentGoal);
+router.post("/goal", authenticate, setGoal);
 
 export default router;
