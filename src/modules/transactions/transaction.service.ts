@@ -1,10 +1,12 @@
 import {CreateTransactionDTO} from './transaction.dto';
 import {prisma} from "../../database/prisma";
+import {updateMonthlyAnalytics} from "../analytics/analytics.updater";
 
 export const createTransaction = async (
     userId: string,
     data: CreateTransactionDTO
 ) => {
+
     return prisma.$transaction(async (tx) => {
 
         const type = data.transactionType;
@@ -21,17 +23,13 @@ export const createTransaction = async (
                 include: {children: true}
             });
 
-            if (!category) {
-                throw new Error("Invalid category");
-            }
+            if (!category) throw new Error("Invalid category");
 
-            if (category.type !== type) {
-                throw new Error("Category type does not match transaction type");
-            }
+            if (category.type !== type)
+                throw new Error("Category type mismatch");
 
-            if (category.children.length > 0) {
-                throw new Error("Transactions must use a subcategory");
-            }
+            if (category.children.length > 0)
+                throw new Error("Transactions must use subcategory");
         }
 
         const fromAccount = data.fromAccountId
@@ -46,18 +44,12 @@ export const createTransaction = async (
             })
             : null;
 
-        // ===============================
-        // Validation
-        // ===============================
-
         if (type === "EXPENSE" || type === "INVESTMENT") {
-            if (!fromAccount)
-                throw new Error("fromAccountId required");
+            if (!fromAccount) throw new Error("fromAccountId required");
         }
 
         if (type === "INCOME") {
-            if (!toAccount)
-                throw new Error("toAccountId required");
+            if (!toAccount) throw new Error("toAccountId required");
         }
 
         if (type === "TRANSFER") {
@@ -67,10 +59,6 @@ export const createTransaction = async (
             if (fromAccount.id === toAccount.id)
                 throw new Error("Cannot transfer to same account");
         }
-
-        // ===============================
-        // Balance logic
-        // ===============================
 
         if (type === "EXPENSE") {
             await tx.account.update({
@@ -87,7 +75,6 @@ export const createTransaction = async (
         }
 
         if (type === "TRANSFER") {
-
             await tx.account.update({
                 where: {id: fromAccount!.id},
                 data: {balance: {decrement: amount}}
@@ -105,11 +92,12 @@ export const createTransaction = async (
                 data: {balance: {decrement: amount}}
             });
         }
+
         const date = new Date(data.date);
         const year = date.getFullYear();
         const month = date.getMonth() + 1;
 
-        return tx.transaction.create({
+        const trx = await tx.transaction.create({
             data: {
                 userId,
                 type,
@@ -124,6 +112,19 @@ export const createTransaction = async (
                 note: data.note
             }
         });
+
+        if (type !== "TRANSFER") {
+            await updateMonthlyAnalytics(
+                tx,
+                userId,
+                year,
+                month,
+                type,
+                amount,
+                "add"
+            );
+        }
+        return trx;
     });
 };
 
@@ -181,7 +182,17 @@ export const deleteTransaction = async (
             data: {deletedAt: new Date()}
         });
 
-        return true;
+        if (trx.type !== "TRANSFER") {
+            await updateMonthlyAnalytics(
+                tx,
+                userId,
+                trx.year,
+                trx.month,
+                trx.type,
+                trx.amount,
+                "remove"
+            );
+        }
     });
 };
 
@@ -238,7 +249,17 @@ export const restoreTransaction = async (
             data: {deletedAt: null}
         });
 
-        return true;
+        if (trx.type !== "TRANSFER") {
+            await updateMonthlyAnalytics(
+                tx,
+                userId,
+                trx.year,
+                trx.month,
+                trx.type,
+                trx.amount,
+                "add"
+            );
+        }
     });
 };
 

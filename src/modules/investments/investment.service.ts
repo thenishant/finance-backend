@@ -1,17 +1,18 @@
 import {prisma} from "../../database/prisma";
 
-export const setMonthlyInvestmentGoal = async (
+export const setInvestmentGoal = async (
     userId: string,
     year: number,
-    month: number,
-    goalPercent: number
+    goalPercent: number,
+    month?: number
 ) => {
+
     return prisma.investmentGoal.upsert({
         where: {
             userId_year_month: {
                 userId,
                 year,
-                month
+                month: month ?? null
             }
         },
         update: {
@@ -20,7 +21,7 @@ export const setMonthlyInvestmentGoal = async (
         create: {
             userId,
             year,
-            month,
+            month: month ?? null,
             goalPercent
         }
     });

@@ -42,20 +42,20 @@ export const yearly = async (
     res: Response,
     next: NextFunction
 ) => {
+    const start = Date.now();
+
     try {
+
         const year = Number(req.query.year);
 
-        if (!year) {
-            return res.status(400).json({
-                success: false,
-                error: {message: "Year is required"}
-            });
-        }
+        console.log("1. Before service", Date.now() - start);
 
         const data = await getYearlyAnalytics(
             req.user!.userId,
             year
         );
+
+        console.log("2. After service", Date.now() - start);
 
         return res.json({
             success: true,

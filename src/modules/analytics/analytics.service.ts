@@ -3,23 +3,25 @@ import {prisma} from "../../database/prisma";
 const safeSum = (value: number | null | undefined): number =>
     value ?? 0;
 
+/* ======================================================
+   MONTHLY ANALYTICS
+====================================================== */
+
 export const getMonthlyAnalytics = async (
     userId: string,
     year: number,
     month: number
 ) => {
 
-    const [totals, goal] = await Promise.all([
-        prisma.transaction.groupBy({
-            by: ["type"],
+    const [analytics, goal] = await Promise.all([
+        prisma.monthlyAnalytics.findUnique({
             where: {
-                userId,
-                deletedAt: null,
-                year,
-                month
-            },
-            _sum: {amount: true},
-            orderBy: {type: "asc"}
+                userId_year_month: {
+                    userId,
+                    year,
+                    month
+                }
+            }
         }),
 
         prisma.investmentGoal.findUnique({
@@ -33,14 +35,13 @@ export const getMonthlyAnalytics = async (
         })
     ]);
 
-    const totalIncome =
-        safeSum(totals.find(t => t.type === "INCOME")?._sum?.amount);
+    const totalIncome = analytics?.totalIncome ?? 0;
+    const totalExpense = analytics?.totalExpense ?? 0;
+    const totalInvestment = analytics?.totalInvestment ?? 0;
 
-    const totalExpense =
-        safeSum(totals.find(t => t.type === "EXPENSE")?._sum?.amount);
-
-    const totalInvestment =
-        safeSum(totals.find(t => t.type === "INVESTMENT")?._sum?.amount);
+    /* ==============================
+       Expense Breakdown (category)
+    ============================== */
 
     const rawBreakdown: any[] = await prisma.$queryRaw`
         SELECT parent.id     as "parentId",
@@ -94,17 +95,38 @@ export const getMonthlyAnalytics = async (
 
     const expenseBreakdown = Object.values(parentMap);
 
+    /* ==============================
+       Investment Goal
+    ============================== */
+
     const goalPercent = goal?.goalPercent ?? null;
-    const goalAmount = goalPercent !== null ? (totalIncome * goalPercent) / 100 : null;
+
+    const goalAmount =
+        goalPercent !== null
+            ? (totalIncome * goalPercent) / 100
+            : null;
+
     const invested = totalInvestment;
-    const remaining = goalAmount !== null ? Math.max(goalAmount - invested, 0) : null;
-    const progress = goalAmount && goalAmount > 0 ? Number((invested / goalAmount).toFixed(2)) : null;
+
+    const remaining =
+        goalAmount !== null
+            ? Math.max(goalAmount - invested, 0)
+            : null;
+
+    const progress =
+        goalAmount && goalAmount > 0
+            ? Number((invested / goalAmount).toFixed(2))
+            : null;
 
     return {
         totalIncome,
         totalExpense,
         totalInvestment,
-        netSavings: totalIncome - totalExpense - totalInvestment,
+        netSavings:
+            totalIncome -
+            totalExpense -
+            totalInvestment,
+
         investmentGoal: goalPercent
             ? {
                 percent: goalPercent,
@@ -114,49 +136,182 @@ export const getMonthlyAnalytics = async (
                 progress
             }
             : null,
+
         expenseBreakdown
     };
 };
+
+/* ======================================================
+   YEARLY ANALYTICS
+====================================================== */
 
 export const getYearlyAnalytics = async (
     userId: string,
     year: number
 ) => {
 
-    const totals = await prisma.transaction.groupBy({
-        by: ["type"],
-        where: {
-            userId,
-            deletedAt: null,
-            year
-        },
-        _sum: {amount: true},
-        orderBy: {type: "asc"}
-    });
+    // const [monthsData, goals] = await Promise.all([
+    //
+    //     prisma.monthlyAnalytics.findMany({
+    //         where: {
+    //             userId,
+    //             year
+    //         },
+    //         orderBy: {
+    //             month: "asc"
+    //         }
+    //     }),
+    //
+    //     prisma.investmentGoal.findMany({
+    //         where: {
+    //             userId,
+    //             year
+    //         }
+    //     })
+    // ]);
+
+    const start = Date.now();
+
+    const [monthsData, goals] = await Promise.all([
+        prisma.monthlyAnalytics.findMany({
+            where: {userId, year},
+            orderBy: {month: "asc"}
+        }),
+        prisma.investmentGoal.findMany({
+            where: {userId, year}
+        })
+    ]);
+
+    console.log("DB query took:", Date.now() - start, "ms");
+
+
+    const monthlyMap: Record<number, any> = {};
+
+    for (let m = 1; m <= 12; m++) {
+
+        monthlyMap[m] = {
+            month: m,
+            income: 0,
+            expense: 0,
+            savings: 0,
+            investment: {
+                invested: 0,
+                goalPercent: 0,
+                goalAmount: 0,
+                remaining: 0,
+                progress: 0,
+                status: "red"
+            }
+        };
+    }
+
+    /* ==============================
+       Fill Monthly Analytics
+    ============================== */
+
+    for (const m of monthsData) {
+
+        monthlyMap[m.month].income = m.totalIncome;
+        monthlyMap[m.month].expense = m.totalExpense;
+        monthlyMap[m.month].investment.invested =
+            m.totalInvestment;
+    }
+
+    /* ==============================
+       Resolve Goals
+    ============================== */
+
+    const resolveGoal = (month: number) => {
+
+        const monthlyGoal = goals.find(
+            g => g.month === month
+        );
+
+        if (monthlyGoal) return monthlyGoal.goalPercent;
+
+        const yearlyGoal = goals.find(
+            g => g.month === null
+        );
+
+        if (yearlyGoal) return yearlyGoal.goalPercent;
+
+        return 0;
+    };
+
+    /* ==============================
+       Calculate Metrics
+    ============================== */
+
+    for (const m of Object.values(monthlyMap)) {
+
+        m.savings =
+            m.income -
+            m.expense -
+            m.investment.invested;
+
+        const goalPercent = resolveGoal(m.month);
+
+        m.investment.goalPercent = goalPercent;
+
+        m.investment.goalAmount =
+            m.income * (goalPercent / 100);
+
+        m.investment.remaining =
+            Math.max(
+                m.investment.goalAmount -
+                m.investment.invested,
+                0
+            );
+
+        m.investment.progress =
+            m.investment.goalAmount > 0
+                ? m.investment.invested /
+                m.investment.goalAmount
+                : 0;
+
+        const p = m.investment.progress;
+
+        if (p >= 1) m.investment.status = "green";
+        else if (p >= 0.5) m.investment.status = "yellow";
+        else if (p > 0) m.investment.status = "orange";
+        else m.investment.status = "red";
+    }
+
+    const months = Object.values(monthlyMap);
+
+    /* ==============================
+       Year Totals
+    ============================== */
 
     const totalIncome =
-        safeSum(
-            totals.find(t => t.type === "INCOME")?._sum?.amount
-        );
+        months.reduce((a, m) => a + m.income, 0);
 
     const totalExpense =
-        safeSum(
-            totals.find(t => t.type === "EXPENSE")?._sum?.amount
-        );
+        months.reduce((a, m) => a + m.expense, 0);
 
     const totalInvestment =
-        safeSum(
-            totals.find(t => t.type === "INVESTMENT")?._sum?.amount
+        months.reduce(
+            (a, m) => a + m.investment.invested,
+            0
         );
 
     return {
-        totalIncome,
-        totalExpense,
-        totalInvestment,
-        netSavings:
-            totalIncome - totalExpense - totalInvestment
+        total: {
+            totalIncome,
+            totalExpense,
+            totalInvestment,
+            netSavings:
+                totalIncome -
+                totalExpense -
+                totalInvestment
+        },
+        months
     };
 };
+
+/* ======================================================
+   TOP SPENDING CATEGORIES
+====================================================== */
 
 export const getTopSpendingCategories = async (
     userId: string,
@@ -211,6 +366,10 @@ export const getTopSpendingCategories = async (
     });
 };
 
+/* ======================================================
+   MONTHLY COMPARISON
+====================================================== */
+
 export const getMonthlyComparison = async (
     userId: string,
     year: number,
@@ -225,50 +384,46 @@ export const getMonthlyComparison = async (
         prevYear = year - 1;
     }
 
-    const aggregate = async (
-        y: number,
-        m: number
-    ) => {
-
-        const totals = await prisma.transaction.groupBy({
-            by: ["type"],
-            where: {
-                userId,
-                deletedAt: null,
-                year: y,
-                month: m
-            },
-            _sum: {amount: true},
-            orderBy: {type: "asc"}
-        });
-
-        const income =
-            safeSum(
-                totals.find(t => t.type === "INCOME")?._sum?.amount
-            );
-
-        const expense =
-            safeSum(
-                totals.find(t => t.type === "EXPENSE")?._sum?.amount
-            );
-
-        const investment =
-            safeSum(
-                totals.find(t => t.type === "INVESTMENT")?._sum?.amount
-            );
-
-        return {
-            totalIncome: income,
-            totalExpense: expense,
-            totalInvestment: investment,
-            netSavings: income - expense - investment
-        };
-    };
-
     const [current, previous] = await Promise.all([
-        aggregate(year, month),
-        aggregate(prevYear, prevMonth)
+
+        prisma.monthlyAnalytics.findUnique({
+            where: {
+                userId_year_month: {
+                    userId,
+                    year,
+                    month
+                }
+            }
+        }),
+
+        prisma.monthlyAnalytics.findUnique({
+            where: {
+                userId_year_month: {
+                    userId,
+                    year: prevYear,
+                    month: prevMonth
+                }
+            }
+        })
     ]);
+
+    const currIncome = current?.totalIncome ?? 0;
+    const currExpense = current?.totalExpense ?? 0;
+    const currInvestment = current?.totalInvestment ?? 0;
+
+    const prevIncome = previous?.totalIncome ?? 0;
+    const prevExpense = previous?.totalExpense ?? 0;
+    const prevInvestment = previous?.totalInvestment ?? 0;
+
+    const currSavings =
+        currIncome -
+        currExpense -
+        currInvestment;
+
+    const prevSavings =
+        prevIncome -
+        prevExpense -
+        prevInvestment;
 
     const calculateChange = (curr: number, prev: number) => {
 
@@ -283,25 +438,26 @@ export const getMonthlyComparison = async (
     };
 
     return {
-        current,
-        previous,
+
+        current: {
+            totalIncome: currIncome,
+            totalExpense: currExpense,
+            totalInvestment: currInvestment,
+            netSavings: currSavings
+        },
+
+        previous: {
+            totalIncome: prevIncome,
+            totalExpense: prevExpense,
+            totalInvestment: prevInvestment,
+            netSavings: prevSavings
+        },
+
         change: {
-            income: calculateChange(
-                current.totalIncome,
-                previous.totalIncome
-            ),
-            expense: calculateChange(
-                current.totalExpense,
-                previous.totalExpense
-            ),
-            investment: calculateChange(
-                current.totalInvestment,
-                previous.totalInvestment
-            ),
-            savings: calculateChange(
-                current.netSavings,
-                previous.netSavings
-            )
+            income: calculateChange(currIncome, prevIncome),
+            expense: calculateChange(currExpense, prevExpense),
+            investment: calculateChange(currInvestment, prevInvestment),
+            savings: calculateChange(currSavings, prevSavings)
         }
     };
 };
