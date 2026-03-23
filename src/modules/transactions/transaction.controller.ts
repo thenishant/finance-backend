@@ -1,9 +1,30 @@
-import {NextFunction, Response} from "express";
+import {NextFunction, Request, Response} from "express";
+
 import {AuthRequest} from "../../shared/middleware/auth.middleware";
 import {createTransactionSchema} from "./transaction.dto";
-import {createTransaction, deleteTransaction, getTransactions, restoreTransaction} from "./transaction.service";
 
-export const create = async (req: AuthRequest, res: Response, next: NextFunction) => {
+import {createTransaction, deleteTransaction, getTransactions, restoreTransaction,} from "./transaction.service";
+
+/**
+ * ✅ Generic typed request
+ */
+type TypedRequest<Params = {}, Body = {}> = Request<
+    Params,
+    any,
+    Body
+> &
+    AuthRequest;
+
+/**
+ * ============================
+ * CREATE
+ * ============================
+ */
+export const create = async (
+    req: TypedRequest<{}, any>,
+    res: Response,
+    next: NextFunction
+) => {
     try {
         const validated = createTransactionSchema.parse(req.body);
 
@@ -14,64 +35,77 @@ export const create = async (req: AuthRequest, res: Response, next: NextFunction
 
         return res.status(201).json({
             success: true,
-            data: transaction
+            data: transaction,
         });
     } catch (error) {
         next(error);
     }
 };
 
-// DELETE (Soft Delete + Reverse Balance)
-export const remove = async (req: AuthRequest, res: Response, next: NextFunction) => {
-    try {
-        const id = req.params.id;
+/**
+ * ============================
+ * DELETE (Soft Delete)
+ * ============================
+ */
+type IdParams = { id: string };
 
-        if (!id || Array.isArray(id)) {
-            return res.status(400).json({
-                success: false,
-                error: {message: "Invalid transaction id"}
-            });
-        }
+export const remove = async (
+    req: TypedRequest<IdParams>,
+    res: Response,
+    next: NextFunction
+) => {
+    try {
+        const id = req.params.id; // ✅ always string
 
         await deleteTransaction(req.user!.userId, id);
 
         return res.json({
-            success: true
+            success: true,
         });
     } catch (error) {
         next(error);
     }
 };
 
-// RESTORE
-export const restore = async (req: AuthRequest, res: Response, next: NextFunction) => {
+/**
+ * ============================
+ * RESTORE
+ * ============================
+ */
+export const restore = async (
+    req: TypedRequest<IdParams>,
+    res: Response,
+    next: NextFunction
+) => {
     try {
-        const id = req.params.id;
-
-        if (!id || Array.isArray(id)) {
-            return res.status(400).json({
-                success: false,
-                error: {message: "Invalid transaction id"}
-            });
-        }
+        const id = req.params.id; // ✅ always string
 
         await restoreTransaction(req.user!.userId, id);
 
         return res.json({
-            success: true
+            success: true,
         });
     } catch (error) {
         next(error);
     }
 };
 
-export const getAllTransactions = async (req: AuthRequest, res: Response, next: NextFunction) => {
+/**
+ * ============================
+ * GET ALL
+ * ============================
+ */
+export const getAllTransactions = async (
+    req: TypedRequest,
+    res: Response,
+    next: NextFunction
+) => {
     try {
         const transactions = await getTransactions(req.user!.userId);
 
         return res.json({
             success: true,
-            data: transactions
+            data: transactions,
         });
     } catch (error) {
         next(error);

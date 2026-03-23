@@ -6,9 +6,10 @@ const router = Router();
 
 router.use(authenticate);
 
-router.post("/", create);
-router.delete("/:id", remove);
-router.post("/:id/restore", restore);
 router.get("/", getAllTransactions);
+router.post("/", create);
+
+router.delete("/:id", remove);
+router.patch("/:id/restore", restore);
 
 export default router;

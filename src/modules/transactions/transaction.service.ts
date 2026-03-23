@@ -1,37 +1,22 @@
-import {CreateTransactionDTO} from './transaction.dto';
 import {prisma} from "../../database/prisma";
-import {updateMonthlyAnalytics} from "../analytics/analytics.updater";
+import {Prisma} from "@prisma/client";
 
-export const createTransaction = async (
-    userId: string,
-    data: CreateTransactionDTO
-) => {
-
+export const createTransaction = async (userId: string, data: any) => {
     return prisma.$transaction(async (tx) => {
 
-        const type = data.transactionType;
-        const amount = data.amount;
-
-        let category = null;
-
-        if (data.categoryId) {
-            category = await tx.category.findFirst({
-                where: {
-                    id: data.categoryId,
-                    userId
-                },
-                include: {children: true}
+        // ✅ 1. Idempotency check
+        if (data.idempotencyKey) {
+            const existing = await tx.transaction.findUnique({
+                where: {idempotencyKey: data.idempotencyKey}
             });
 
-            if (!category) throw new Error("Invalid category");
-
-            if (category.type !== type)
-                throw new Error("Category type mismatch");
-
-            if (category.children.length > 0)
-                throw new Error("Transactions must use subcategory");
+            if (existing) return existing;
         }
 
+        const amount = new Prisma.Decimal(data.amount);
+        const date = new Date(data.date);
+
+        // ✅ 2. Validate accounts
         const fromAccount = data.fromAccountId
             ? await tx.account.findFirst({
                 where: {id: data.fromAccountId, userId}
@@ -44,15 +29,15 @@ export const createTransaction = async (
             })
             : null;
 
-        if (type === "EXPENSE" || type === "INVESTMENT") {
+        if (data.type === "EXPENSE" || data.type === "INVESTMENT") {
             if (!fromAccount) throw new Error("fromAccountId required");
         }
 
-        if (type === "INCOME") {
+        if (data.type === "INCOME") {
             if (!toAccount) throw new Error("toAccountId required");
         }
 
-        if (type === "TRANSFER") {
+        if (data.type === "TRANSFER") {
             if (!fromAccount || !toAccount)
                 throw new Error("Both accounts required");
 
@@ -60,70 +45,78 @@ export const createTransaction = async (
                 throw new Error("Cannot transfer to same account");
         }
 
-        if (type === "EXPENSE") {
-            await tx.account.update({
-                where: {id: fromAccount!.id},
-                data: {balance: {decrement: amount}}
-            });
-        }
-
-        if (type === "INCOME") {
-            await tx.account.update({
-                where: {id: toAccount!.id},
-                data: {balance: {increment: amount}}
-            });
-        }
-
-        if (type === "TRANSFER") {
-            await tx.account.update({
-                where: {id: fromAccount!.id},
-                data: {balance: {decrement: amount}}
-            });
-
-            await tx.account.update({
-                where: {id: toAccount!.id},
-                data: {balance: {increment: amount}}
-            });
-        }
-
-        if (type === "INVESTMENT") {
-            await tx.account.update({
-                where: {id: fromAccount!.id},
-                data: {balance: {decrement: amount}}
-            });
-        }
-
-        const date = new Date(data.date);
-        const year = date.getFullYear();
-        const month = date.getMonth() + 1;
-
+        // ✅ 3. Create transaction
         const trx = await tx.transaction.create({
             data: {
                 userId,
-                type,
+                type: data.type,
                 amount,
-                paymentMethod: data.paymentMethod,
                 date,
-                year,
-                month,
+                year: date.getFullYear(),
+                month: date.getMonth() + 1,
                 categoryId: data.categoryId,
                 fromAccountId: data.fromAccountId,
                 toAccountId: data.toAccountId,
-                note: data.note
+                paymentMethod: data.paymentMethod,
+                note: data.note,
+                idempotencyKey: data.idempotencyKey
             }
         });
 
-        if (type !== "TRANSFER") {
-            await updateMonthlyAnalytics(
-                tx,
+        // ✅ 4. Build ledger entries
+        const entries: any[] = [];
+
+        if (data.type === "EXPENSE" || data.type === "INVESTMENT") {
+            entries.push({
                 userId,
-                year,
-                month,
-                type,
-                amount,
-                "add"
+                accountId: data.fromAccountId,
+                transactionId: trx.id,
+                amount: amount.negated()
+            });
+        }
+
+        if (data.type === "INCOME") {
+            entries.push({
+                userId,
+                accountId: data.toAccountId,
+                transactionId: trx.id,
+                amount: amount
+            });
+        }
+
+        if (data.type === "TRANSFER") {
+            entries.push(
+                {
+                    userId,
+                    accountId: data.fromAccountId,
+                    transactionId: trx.id,
+                    amount: amount.negated()
+                },
+                {
+                    userId,
+                    accountId: data.toAccountId,
+                    transactionId: trx.id,
+                    amount: amount
+                }
             );
         }
+
+        // ✅ 5. Insert ledger
+        await tx.ledgerEntry.createMany({data: entries});
+
+        // ✅ 6. Update balances (cache)
+        for (const entry of entries) {
+            await tx.account.update({
+                where: {id: entry.accountId},
+                data: {
+                    balance:
+                        entry.amount.gt(0)
+                            ? {increment: entry.amount}
+                            : {decrement: entry.amount.abs()}
+                }
+            });
+        }
+
         return trx;
     });
 };
@@ -140,59 +133,40 @@ export const deleteTransaction = async (
 
         if (!trx) throw new Error("Transaction not found");
 
-        const amount = trx.amount;
+        // ✅ Get ledger entries
+        const entries = await tx.ledgerEntry.findMany({
+            where: {transactionId}
+        });
 
-        // Reverse based on original type
-        if (trx.type === 'INCOME') {
+        // ✅ Reverse entries
+        const reversed = entries.map(e => ({
+            userId,
+            accountId: e.accountId,
+            transactionId: trx.id,
+            amount: new Prisma.Decimal(e.amount).negated()
+        }));
+
+        // ✅ Insert reversal
+        await tx.ledgerEntry.createMany({data: reversed});
+
+        // ✅ Update balances
+        for (const r of reversed) {
             await tx.account.update({
-                where: {id: trx.toAccountId!},
-                data: {balance: {decrement: amount}}
+                where: {id: r.accountId},
+                data: {
+                    balance:
+                        r.amount.gt(0)
+                            ? {increment: r.amount}
+                            : {decrement: r.amount.abs()}
+                }
             });
         }
 
-        if (trx.type === 'EXPENSE') {
-            await tx.account.update({
-                where: {id: trx.fromAccountId!},
-                data: {balance: {increment: amount}}
-            });
-        }
-
-        if (trx.type === 'TRANSFER') {
-            await tx.account.update({
-                where: {id: trx.fromAccountId!},
-                data: {balance: {increment: amount}}
-            });
-
-            await tx.account.update({
-                where: {id: trx.toAccountId!},
-                data: {balance: {decrement: amount}}
-            });
-        }
-
-        if (trx.type === 'INVESTMENT') {
-            await tx.account.update({
-                where: {id: trx.fromAccountId!},
-                data: {balance: {increment: amount}}
-            });
-        }
-
-        // Soft delete
+        // ✅ Soft delete transaction
         await tx.transaction.update({
             where: {id: transactionId},
             data: {deletedAt: new Date()}
         });
-
-        if (trx.type !== "TRANSFER") {
-            await updateMonthlyAnalytics(
-                tx,
-                userId,
-                trx.year,
-                trx.month,
-                trx.type,
-                trx.amount,
-                "remove"
-            );
-        }
     });
 };
 
@@ -208,39 +182,29 @@ export const restoreTransaction = async (
 
         if (!trx) throw new Error("Transaction not found");
 
-        const amount = trx.amount;
+        const entries = await tx.ledgerEntry.findMany({
+            where: {transactionId}
+        });
 
-        // Reapply original effect
-        if (trx.type === 'INCOME') {
-            await tx.account.update({
-                where: {id: trx.toAccountId!},
-                data: {balance: {increment: amount}}
-            });
-        }
+        // Reverse reversal (apply again)
+        const reapplied = entries.map(e => ({
+            userId,
+            accountId: e.accountId,
+            transactionId: trx.id,
+            amount: new Prisma.Decimal(e.amount)
+        }));
 
-        if (trx.type === 'EXPENSE') {
-            await tx.account.update({
-                where: {id: trx.fromAccountId!},
-                data: {balance: {decrement: amount}}
-            });
-        }
+        await tx.ledgerEntry.createMany({data: reapplied});
 
-        if (trx.type === 'TRANSFER') {
+        for (const r of reapplied) {
             await tx.account.update({
-                where: {id: trx.fromAccountId!},
-                data: {balance: {decrement: amount}}
-            });
-
-            await tx.account.update({
-                where: {id: trx.toAccountId!},
-                data: {balance: {increment: amount}}
-            });
-        }
-
-        if (trx.type === 'INVESTMENT') {
-            await tx.account.update({
-                where: {id: trx.fromAccountId!},
-                data: {balance: {decrement: amount}}
+                where: {id: r.accountId},
+                data: {
+                    balance:
+                        r.amount.gt(0)
+                            ? {increment: r.amount}
+                            : {decrement: r.amount.abs()}
+                }
             });
         }
 
@@ -248,18 +212,6 @@ export const restoreTransaction = async (
             where: {id: transactionId},
             data: {deletedAt: null}
         });
-
-        if (trx.type !== "TRANSFER") {
-            await updateMonthlyAnalytics(
-                tx,
-                userId,
-                trx.year,
-                trx.month,
-                trx.type,
-                trx.amount,
-                "add"
-            );
-        }
     });
 };
 
@@ -278,4 +230,42 @@ export const getTransactions = async (userId: string) => {
             date: "desc"
         }
     });
+};
+
+export const rebuildAccountBalance = async (accountId: string) => {
+
+    const entries = await prisma.ledgerEntry.findMany({
+        where: {accountId}
+    });
+
+    const balance = entries.reduce(
+        (acc, e) => acc.plus(e.amount),
+        new Prisma.Decimal(0)
+    );
+
+    await prisma.account.update({
+        where: {id: accountId},
+        data: {balance}
+    });
+};
+
+export const getAccountWithComputedBalance = async (accountId: string) => {
+
+    const entries = await prisma.ledgerEntry.findMany({
+        where: {accountId}
+    });
+
+    const computed = entries.reduce(
+        (acc, e) => acc.plus(e.amount),
+        new Prisma.Decimal(0)
+    );
+
+    const account = await prisma.account.findUnique({
+        where: {id: accountId}
+    });
+
+    return {
+        ...account,
+        computedBalance: computed
+    };
 };

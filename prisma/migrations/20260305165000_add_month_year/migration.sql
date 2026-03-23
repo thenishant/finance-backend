@@ -1,3 +1,0 @@
--- AlterTable
-ALTER TABLE "Transaction" ALTER COLUMN "month" DROP NOT NULL,
-ALTER COLUMN "year" DROP NOT NULL;

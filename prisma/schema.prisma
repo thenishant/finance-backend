@@ -21,22 +21,23 @@ model User {
   transactions     Transaction[]
   investmentGoals  InvestmentGoal[]
   MonthlyAnalytics MonthlyAnalytics[]
+  LedgerEntry      LedgerEntry[]
 }
 
 model Account {
-  id      String      @id @default(uuid())
-  userId  String
-  name    String
-  type    AccountType
-  balance Float
-
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id        String      @id @default(uuid())
+  userId    String
+  name      String
+  type      AccountType
+  balance   Decimal     @db.Decimal(14, 2)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
   deletedAt DateTime?
 
   user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactionsFrom Transaction[] @relation("FromAccount")
   transactionsTo   Transaction[] @relation("ToAccount")
+  LedgerEntry      LedgerEntry[]
 
   @@index([userId])
 }
@@ -64,13 +65,17 @@ model Category {
 }
 
 model Transaction {
-  id     String          @id @default(uuid())
+  id     String @id @default(uuid())
   userId String
-  date   DateTime
-  year   Int
-  month  Int
+
+  date  DateTime
+  year  Int
+  month Int
+
   type   TransactionType
-  amount Float
+  amount Decimal         @db.Decimal(14, 2)
+
+  idempotencyKey String? @unique
 
   categoryId    String?
   fromAccountId String?
@@ -89,11 +94,7 @@ model Transaction {
   fromAccount Account? @relation("FromAccount", fields: [fromAccountId], references: [id])
   toAccount   Account? @relation("ToAccount", fields: [toAccountId], references: [id])
 
-  /**
-   * ===============================
-   * PERFORMANCE INDEXES
-   * ===============================
-   */
+  ledgerEntries LedgerEntry[]
 
   @@index([userId])
   @@index([userId, year])
@@ -127,18 +128,37 @@ model MonthlyAnalytics {
   year   Int
   month  Int
 
-  totalIncome     Float @default(0)
-  totalExpense    Float @default(0)
-  totalInvestment Float @default(0)
+  totalIncome     Decimal @default(0) @db.Decimal(14, 2)
+  totalExpense    Decimal @default(0) @db.Decimal(14, 2)
+  totalInvestment Decimal @default(0) @db.Decimal(14, 2)
 
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, year, month])
-  // important indexes
   @@index([userId, year])
   @@index([userId, year, month])
+}
+
+model LedgerEntry {
+  id            String @id @default(uuid())
+  userId        String
+  accountId     String
+  transactionId String
+
+  amount Decimal @db.Decimal(14, 2)
+
+  createdAt DateTime @default(now())
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account     Account     @relation(fields: [accountId], references: [id])
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@unique([transactionId, accountId, amount])
+  @@index([accountId])
+  @@index([transactionId])
+  @@index([userId])
 }
 
 enum AuthProvider {
