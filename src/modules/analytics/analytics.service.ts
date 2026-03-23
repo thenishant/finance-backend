@@ -1,7 +1,96 @@
 import {prisma} from "../../database/prisma";
 
-const safeSum = (value: number | null | undefined): number =>
-    value ?? 0;
+/* ======================================================
+   TYPES
+====================================================== */
+
+type ExpenseChild = {
+    id: string;
+    name: string;
+    total: number;
+};
+
+type ExpenseParent = {
+    category: string;
+    total: number;
+    children: ExpenseChild[];
+};
+
+type InvestmentGoalData = {
+    percent: number;
+    goalAmount: number;
+    invested: number;
+    remaining: number;
+    progress: number | null;
+};
+
+type MonthlyAnalyticsResponse = {
+    totalIncome: number;
+    totalExpense: number;
+    totalInvestment: number;
+    netSavings: number;
+    investmentGoal: InvestmentGoalData | null;
+    expenseBreakdown: ExpenseParent[];
+};
+
+type YearMonth = {
+    month: number;
+    income: number;
+    expense: number;
+    savings: number;
+    investment: {
+        invested: number;
+        goalPercent: number;
+        goalAmount: number;
+        remaining: number;
+        progress: number;
+        status: "green" | "yellow" | "orange" | "red";
+    };
+};
+
+type YearlyAnalyticsResponse = {
+    total: {
+        totalIncome: number;
+        totalExpense: number;
+        totalInvestment: number;
+        netSavings: number;
+    };
+    months: YearMonth[];
+};
+
+type TopCategory = {
+    categoryId: string | null;
+    name: string;
+    total: number;
+};
+
+type MonthlyComparisonResponse = {
+    current: {
+        totalIncome: number;
+        totalExpense: number;
+        totalInvestment: number;
+        netSavings: number;
+    };
+    previous: {
+        totalIncome: number;
+        totalExpense: number;
+        totalInvestment: number;
+        netSavings: number;
+    };
+    change: {
+        income: { diff: number; percent: number | null };
+        expense: { diff: number; percent: number | null };
+        investment: { diff: number; percent: number | null };
+        savings: { diff: number; percent: number | null };
+    };
+};
+
+/* ======================================================
+   HELPERS
+====================================================== */
+
+const toNumber = (value: unknown): number =>
+    Number(value ?? 0);
 
 /* ======================================================
    MONTHLY ANALYTICS
@@ -11,39 +100,36 @@ export const getMonthlyAnalytics = async (
     userId: string,
     year: number,
     month: number
-) => {
+): Promise<MonthlyAnalyticsResponse> => {
 
     const [analytics, goal] = await Promise.all([
         prisma.monthlyAnalytics.findUnique({
             where: {
-                userId_year_month: {
-                    userId,
-                    year,
-                    month
-                }
+                userId_year_month: {userId, year, month}
             }
         }),
-
         prisma.investmentGoal.findUnique({
             where: {
-                userId_year_month: {
-                    userId,
-                    year,
-                    month
-                }
+                userId_year_month: {userId, year, month}
             }
         })
     ]);
 
-    const totalIncome = analytics?.totalIncome ?? 0;
-    const totalExpense = analytics?.totalExpense ?? 0;
-    const totalInvestment = analytics?.totalInvestment ?? 0;
+    const totalIncome = toNumber(analytics?.totalIncome);
+    const totalExpense = toNumber(analytics?.totalExpense);
+    const totalInvestment = toNumber(analytics?.totalInvestment);
 
-    /* ==============================
-       Expense Breakdown (category)
-    ============================== */
+    /* Expense Breakdown */
 
-    const rawBreakdown: any[] = await prisma.$queryRaw`
+    type RawRow = {
+        parentId: string | null;
+        parentName: string | null;
+        childId: string;
+        childName: string;
+        total: unknown;
+    };
+
+    const rawBreakdown = await prisma.$queryRaw<RawRow[]>`
         SELECT parent.id     as "parentId",
                parent.name   as "parentName",
                child.id      as "childId",
@@ -63,16 +149,13 @@ export const getMonthlyAnalytics = async (
         ORDER BY total DESC
     `;
 
-    const parentMap: Record<
-        string,
-        { category: string; total: number; children: any[] }
-    > = {};
+    const parentMap: Record<string, ExpenseParent> = {};
 
     for (const row of rawBreakdown) {
 
         const parentId = row.parentId ?? row.childId;
         const parentName = row.parentName ?? row.childName;
-        const amount = Number(row.total);
+        const amount = toNumber(row.total);
 
         if (!parentMap[parentId]) {
             parentMap[parentId] = {
@@ -95,9 +178,7 @@ export const getMonthlyAnalytics = async (
 
     const expenseBreakdown = Object.values(parentMap);
 
-    /* ==============================
-       Investment Goal
-    ============================== */
+    /* Investment */
 
     const goalPercent = goal?.goalPercent ?? null;
 
@@ -126,17 +207,15 @@ export const getMonthlyAnalytics = async (
             totalIncome -
             totalExpense -
             totalInvestment,
-
         investmentGoal: goalPercent
             ? {
                 percent: goalPercent,
-                goalAmount,
+                goalAmount: goalAmount!,
                 invested,
-                remaining,
+                remaining: remaining!,
                 progress
             }
             : null,
-
         expenseBreakdown
     };
 };
@@ -148,29 +227,7 @@ export const getMonthlyAnalytics = async (
 export const getYearlyAnalytics = async (
     userId: string,
     year: number
-) => {
-
-    // const [monthsData, goals] = await Promise.all([
-    //
-    //     prisma.monthlyAnalytics.findMany({
-    //         where: {
-    //             userId,
-    //             year
-    //         },
-    //         orderBy: {
-    //             month: "asc"
-    //         }
-    //     }),
-    //
-    //     prisma.investmentGoal.findMany({
-    //         where: {
-    //             userId,
-    //             year
-    //         }
-    //     })
-    // ]);
-
-    const start = Date.now();
+): Promise<YearlyAnalyticsResponse> => {
 
     const [monthsData, goals] = await Promise.all([
         prisma.monthlyAnalytics.findMany({
@@ -182,13 +239,9 @@ export const getYearlyAnalytics = async (
         })
     ]);
 
-    console.log("DB query took:", Date.now() - start, "ms");
-
-
-    const monthlyMap: Record<number, any> = {};
+    const monthlyMap: Record<number, YearMonth> = {};
 
     for (let m = 1; m <= 12; m++) {
-
         monthlyMap[m] = {
             month: m,
             income: 0,
@@ -205,42 +258,20 @@ export const getYearlyAnalytics = async (
         };
     }
 
-    /* ==============================
-       Fill Monthly Analytics
-    ============================== */
-
     for (const m of monthsData) {
-
-        monthlyMap[m.month].income = m.totalIncome;
-        monthlyMap[m.month].expense = m.totalExpense;
+        monthlyMap[m.month].income = toNumber(m.totalIncome);
+        monthlyMap[m.month].expense = toNumber(m.totalExpense);
         monthlyMap[m.month].investment.invested =
-            m.totalInvestment;
+            toNumber(m.totalInvestment);
     }
 
-    /* ==============================
-       Resolve Goals
-    ============================== */
-
     const resolveGoal = (month: number) => {
-
-        const monthlyGoal = goals.find(
-            g => g.month === month
-        );
-
+        const monthlyGoal = goals.find(g => g.month === month);
         if (monthlyGoal) return monthlyGoal.goalPercent;
 
-        const yearlyGoal = goals.find(
-            g => g.month === null
-        );
-
-        if (yearlyGoal) return yearlyGoal.goalPercent;
-
-        return 0;
+        const yearlyGoal = goals.find(g => g.month === 0);
+        return yearlyGoal?.goalPercent ?? 0;
     };
-
-    /* ==============================
-       Calculate Metrics
-    ============================== */
 
     for (const m of Object.values(monthlyMap)) {
 
@@ -279,10 +310,6 @@ export const getYearlyAnalytics = async (
 
     const months = Object.values(monthlyMap);
 
-    /* ==============================
-       Year Totals
-    ============================== */
-
     const totalIncome =
         months.reduce((a, m) => a + m.income, 0);
 
@@ -317,7 +344,7 @@ export const getTopSpendingCategories = async (
     userId: string,
     year: number,
     month: number
-) => {
+): Promise<TopCategory[]> => {
 
     const result = await prisma.transaction.groupBy({
         by: ["categoryId"],
@@ -361,7 +388,7 @@ export const getTopSpendingCategories = async (
         return {
             categoryId: r.categoryId,
             name: category?.name ?? "Unknown",
-            total: safeSum(r._sum?.amount)
+            total: toNumber(r._sum?.amount)
         };
     });
 };
@@ -374,7 +401,7 @@ export const getMonthlyComparison = async (
     userId: string,
     year: number,
     month: number
-) => {
+): Promise<MonthlyComparisonResponse> => {
 
     let prevYear = year;
     let prevMonth = month - 1;
@@ -385,17 +412,11 @@ export const getMonthlyComparison = async (
     }
 
     const [current, previous] = await Promise.all([
-
         prisma.monthlyAnalytics.findUnique({
             where: {
-                userId_year_month: {
-                    userId,
-                    year,
-                    month
-                }
+                userId_year_month: {userId, year, month}
             }
         }),
-
         prisma.monthlyAnalytics.findUnique({
             where: {
                 userId_year_month: {
@@ -407,13 +428,13 @@ export const getMonthlyComparison = async (
         })
     ]);
 
-    const currIncome = current?.totalIncome ?? 0;
-    const currExpense = current?.totalExpense ?? 0;
-    const currInvestment = current?.totalInvestment ?? 0;
+    const currIncome = toNumber(current?.totalIncome);
+    const currExpense = toNumber(current?.totalExpense);
+    const currInvestment = toNumber(current?.totalInvestment);
 
-    const prevIncome = previous?.totalIncome ?? 0;
-    const prevExpense = previous?.totalExpense ?? 0;
-    const prevInvestment = previous?.totalInvestment ?? 0;
+    const prevIncome = toNumber(previous?.totalIncome);
+    const prevExpense = toNumber(previous?.totalExpense);
+    const prevInvestment = toNumber(previous?.totalInvestment);
 
     const currSavings =
         currIncome -
@@ -426,7 +447,6 @@ export const getMonthlyComparison = async (
         prevInvestment;
 
     const calculateChange = (curr: number, prev: number) => {
-
         const diff = curr - prev;
 
         const percent =
@@ -438,21 +458,18 @@ export const getMonthlyComparison = async (
     };
 
     return {
-
         current: {
             totalIncome: currIncome,
             totalExpense: currExpense,
             totalInvestment: currInvestment,
             netSavings: currSavings
         },
-
         previous: {
             totalIncome: prevIncome,
             totalExpense: prevExpense,
             totalInvestment: prevInvestment,
             netSavings: prevSavings
         },
-
         change: {
             income: calculateChange(currIncome, prevIncome),
             expense: calculateChange(currExpense, prevExpense),
