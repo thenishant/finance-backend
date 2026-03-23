@@ -1,11 +1,15 @@
 import {prisma} from '../../database/prisma';
 import {CreateAccountDTO} from './account.dto';
 
+const toNumber = (value: unknown): number =>
+    Number(value ?? 0);
+
 export const createAccount = async (
     userId: string,
     data: CreateAccountDTO
 ) => {
-    return prisma.account.create({
+
+    const account = await prisma.account.create({
         data: {
             userId,
             name: data.name,
@@ -13,10 +17,16 @@ export const createAccount = async (
             balance: data.balance
         }
     });
+
+    return {
+        ...account,
+        balance: toNumber(account.balance)
+    };
 };
 
 export const getAccounts = async (userId: string) => {
-    return prisma.account.findMany({
+
+    const accounts = await prisma.account.findMany({
         where: {
             userId,
             deletedAt: null
@@ -25,10 +35,16 @@ export const getAccounts = async (userId: string) => {
             createdAt: 'asc'
         }
     });
+
+    return accounts.map(mapAccount);
 };
 
-export const deleteAccount = async (userId: string, accountId: string) => {
-    return prisma.account.updateMany({
+export const deleteAccount = async (
+    userId: string,
+    accountId: string
+) => {
+
+    await prisma.account.updateMany({
         where: {
             id: accountId,
             userId
@@ -37,4 +53,11 @@ export const deleteAccount = async (userId: string, accountId: string) => {
             deletedAt: new Date()
         }
     });
+
+    return {success: true};
 };
+
+const mapAccount = (acc: any) => ({
+    ...acc,
+    balance: Number(acc.balance)
+});
