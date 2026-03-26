@@ -14,13 +14,60 @@ const serialize = (obj: any) =>
         )
     );
 
-const applyBalance = async (tx: Prisma.TransactionClient, accountId: string, amount: Prisma.Decimal) => {
+const applyBalance = async (
+    tx: Prisma.TransactionClient,
+    accountId: string,
+    amount: Prisma.Decimal
+) => {
     return tx.account.update({
         where: {id: accountId},
         data: {
             balance: amount.gt(0)
                 ? {increment: amount}
                 : {decrement: amount.abs()}
+        }
+    });
+};
+
+/* =============================
+   ANALYTICS HELPER (FIXED)
+============================= */
+
+const updateMonthlyAnalytics = async (
+    tx: Prisma.TransactionClient,
+    userId: string,
+    year: number,
+    month: number,
+    type: TransactionType,
+    amount: Prisma.Decimal,
+    operation: "increment" | "decrement"
+) => {
+
+    // ✅ Ignore transfer completely
+    if (type === "TRANSFER") return;
+
+    const getValue = (match: TransactionType) =>
+        type === match ? {[operation]: amount} : undefined;
+
+    await tx.monthlyAnalytics.upsert({
+        where: {
+            userId_year_month: {userId, year, month}
+        },
+        update: {
+            totalIncome: getValue("INCOME"),
+            totalExpense: getValue("EXPENSE"),
+            totalInvestment: getValue("INVESTMENT"),
+        },
+        create: {
+            userId,
+            year,
+            month,
+            totalIncome:
+                type === "INCOME" ? amount : new Prisma.Decimal(0),
+            totalExpense:
+                type === "EXPENSE" ? amount : new Prisma.Decimal(0),
+            totalInvestment:
+                type === "INVESTMENT" ? amount : new Prisma.Decimal(0),
         }
     });
 };
@@ -62,9 +109,13 @@ export const createTransaction = async (
 
         const amount = toDecimal(data.amount);
         const date = new Date(data.date);
+
         if (isNaN(date.getTime())) {
             throw new Error("Invalid date");
         }
+
+        const year = date.getFullYear();
+        const month = date.getMonth() + 1;
 
         /* ---------- FETCH ACCOUNTS ---------- */
 
@@ -81,32 +132,18 @@ export const createTransaction = async (
             : null;
 
         /* ---------- BUSINESS RULES ---------- */
+
         if (type === "INCOME") {
-            if (!data.toAccountId) {
-                throw new Error("toAccountId is required for INCOME");
-            }
-
-            if (!toAccount) {
-                throw new Error("Invalid toAccountId (not found or not owned by user)");
-            }
+            if (!toAccount) throw new Error("Invalid toAccountId");
         }
-        if ((type === "EXPENSE" || type === "INVESTMENT")) {
-            if (!data.fromAccountId) {
-                throw new Error("fromAccountId is required");
-            }
 
-            if (!fromAccount) {
-                throw new Error("Invalid fromAccountId");
-            }
+        if (type === "EXPENSE" || type === "INVESTMENT") {
+            if (!fromAccount) throw new Error("Invalid fromAccountId");
         }
 
         if (type === "TRANSFER") {
-            if (!data.fromAccountId || !data.toAccountId) {
-                throw new Error("Both accounts required");
-            }
-
             if (!fromAccount || !toAccount) {
-                throw new Error("Invalid account(s)");
+                throw new Error("Both accounts required");
             }
 
             if (fromAccount.id === toAccount.id) {
@@ -131,8 +168,8 @@ export const createTransaction = async (
                 type,
                 amount,
                 date,
-                year: date.getFullYear(),
-                month: date.getMonth() + 1,
+                year,
+                month,
                 categoryId,
                 fromAccountId: data.fromAccountId ?? null,
                 toAccountId: data.toAccountId ?? null,
@@ -173,12 +210,20 @@ export const createTransaction = async (
         /* ---------- UPDATE BALANCES ---------- */
 
         for (const entry of entries) {
-            await applyBalance(
-                tx,
-                entry.accountId,
-                toDecimal(entry.amount) // ✅ simple fix
-            );
+            await applyBalance(tx, entry.accountId, toDecimal(entry.amount));
         }
+
+        /* ---------- UPDATE ANALYTICS (FIXED POSITION) ---------- */
+
+        await updateMonthlyAnalytics(
+            tx,
+            userId,
+            year,
+            month,
+            type,
+            amount,
+            "increment"
+        );
 
         return serialize(trx);
     });
@@ -216,6 +261,18 @@ export const deleteTransaction = async (
         for (const r of reversed) {
             await applyBalance(tx, r.accountId, r.amount);
         }
+
+        /* ---------- ANALYTICS ---------- */
+
+        await updateMonthlyAnalytics(
+            tx,
+            userId,
+            trx.year,
+            trx.month,
+            trx.type,
+            toDecimal(trx.amount),
+            "decrement"
+        );
 
         await tx.transaction.update({
             where: {id: transactionId},
@@ -256,6 +313,18 @@ export const restoreTransaction = async (
         for (const r of reapplied) {
             await applyBalance(tx, r.accountId, r.amount);
         }
+
+        /* ---------- ANALYTICS ---------- */
+
+        await updateMonthlyAnalytics(
+            tx,
+            userId,
+            trx.year,
+            trx.month,
+            trx.type,
+            toDecimal(trx.amount),
+            "increment"
+        );
 
         await tx.transaction.update({
             where: {id: transactionId},
