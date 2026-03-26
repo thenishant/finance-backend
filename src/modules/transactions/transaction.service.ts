@@ -81,15 +81,32 @@ export const createTransaction = async (
             : null;
 
         /* ---------- BUSINESS RULES ---------- */
-        if ((type === "EXPENSE" || type === "INVESTMENT") && !fromAccount) {
-            throw new Error("fromAccountId required");
+        if (type === "INCOME") {
+            if (!data.toAccountId) {
+                throw new Error("toAccountId is required for INCOME");
+            }
+
+            if (!toAccount) {
+                throw new Error("Invalid toAccountId (not found or not owned by user)");
+            }
         }
-        if (type === "INCOME" && !toAccount) {
-            throw new Error("toAccountId required");
+        if ((type === "EXPENSE" || type === "INVESTMENT")) {
+            if (!data.fromAccountId) {
+                throw new Error("fromAccountId is required");
+            }
+
+            if (!fromAccount) {
+                throw new Error("Invalid fromAccountId");
+            }
         }
+
         if (type === "TRANSFER") {
-            if (!fromAccount || !toAccount) {
+            if (!data.fromAccountId || !data.toAccountId) {
                 throw new Error("Both accounts required");
+            }
+
+            if (!fromAccount || !toAccount) {
+                throw new Error("Invalid account(s)");
             }
 
             if (fromAccount.id === toAccount.id) {
