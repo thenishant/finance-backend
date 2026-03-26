@@ -1,14 +1,11 @@
 import {prisma} from "../../database/prisma";
-import {Prisma} from "@prisma/client";
+import {Prisma, TransactionType} from "@prisma/client";
 
 /* =============================
    HELPERS
 ============================= */
 
-const toDecimal = (value: any): Prisma.Decimal =>
-    value instanceof Prisma.Decimal
-        ? value
-        : new Prisma.Decimal(value);
+const toDecimal = (v: any) => new Prisma.Decimal(v);
 
 const serialize = (obj: any) =>
     JSON.parse(
@@ -17,19 +14,13 @@ const serialize = (obj: any) =>
         )
     );
 
-const applyBalance = async (
-    tx: any,
-    accountId: string,
-    amount: any
-) => {
-    const amt = toDecimal(amount);
-
+const applyBalance = async (tx: Prisma.TransactionClient, accountId: string, amount: Prisma.Decimal) => {
     return tx.account.update({
         where: {id: accountId},
         data: {
-            balance: amt.gt(0)
-                ? {increment: amt}
-                : {decrement: amt.abs()}
+            balance: amount.gt(0)
+                ? {increment: amount}
+                : {decrement: amount.abs()}
         }
     });
 };
@@ -38,16 +29,24 @@ const applyBalance = async (
    CREATE TRANSACTION
 ============================= */
 
-export const createTransaction = async (userId: string, data: any) => {
+export const createTransaction = async (
+    userId: string,
+    data: {
+        type: TransactionType;
+        amount: number;
+        date: string;
+        categoryId?: string;
+        fromAccountId?: string;
+        toAccountId?: string;
+        paymentMethod: string;
+        note?: string;
+        idempotencyKey?: string;
+    }
+) => {
     return prisma.$transaction(async (tx) => {
 
-        /* ---------- VALIDATION ---------- */
-
-        if (!data.type) {
-            throw new Error("Transaction type is required");
-        }
-
-        const type = data.type;
+        const {type} = data;
+        if (!type) throw new Error("Transaction type is required");
 
         /* ---------- IDEMPOTENCY ---------- */
 
@@ -63,6 +62,9 @@ export const createTransaction = async (userId: string, data: any) => {
 
         const amount = toDecimal(data.amount);
         const date = new Date(data.date);
+        if (isNaN(date.getTime())) {
+            throw new Error("Invalid date");
+        }
 
         /* ---------- FETCH ACCOUNTS ---------- */
 
@@ -79,15 +81,12 @@ export const createTransaction = async (userId: string, data: any) => {
             : null;
 
         /* ---------- BUSINESS RULES ---------- */
-
-        if (["EXPENSE", "INVESTMENT"].includes(type) && !fromAccount) {
+        if ((type === "EXPENSE" || type === "INVESTMENT") && !fromAccount) {
             throw new Error("fromAccountId required");
         }
-
         if (type === "INCOME" && !toAccount) {
             throw new Error("toAccountId required");
         }
-
         if (type === "TRANSFER") {
             if (!fromAccount || !toAccount) {
                 throw new Error("Both accounts required");
@@ -120,7 +119,7 @@ export const createTransaction = async (userId: string, data: any) => {
                 categoryId,
                 fromAccountId: data.fromAccountId ?? null,
                 toAccountId: data.toAccountId ?? null,
-                paymentMethod: data.paymentMethod,
+                paymentMethod: data.paymentMethod as any,
                 note: data.note ?? null,
                 idempotencyKey: data.idempotencyKey ?? null
             }
@@ -130,7 +129,7 @@ export const createTransaction = async (userId: string, data: any) => {
 
         const entries: Prisma.LedgerEntryCreateManyInput[] = [];
 
-        const pushEntry = (accountId: string, amt: Prisma.Decimal) => {
+        const push = (accountId: string, amt: Prisma.Decimal) => {
             entries.push({
                 userId,
                 accountId,
@@ -139,25 +138,29 @@ export const createTransaction = async (userId: string, data: any) => {
             });
         };
 
-        if (["EXPENSE", "INVESTMENT"].includes(type)) {
-            pushEntry(fromAccount!.id, amount.negated());
+        if (type === "EXPENSE" || type === "INVESTMENT") {
+            push(fromAccount!.id, amount.negated());
         }
 
         if (type === "INCOME") {
-            pushEntry(toAccount!.id, amount);
+            push(toAccount!.id, amount);
         }
 
         if (type === "TRANSFER") {
-            pushEntry(fromAccount!.id, amount.negated());
-            pushEntry(toAccount!.id, amount);
+            push(fromAccount!.id, amount.negated());
+            push(toAccount!.id, amount);
         }
 
         await tx.ledgerEntry.createMany({data: entries});
 
         /* ---------- UPDATE BALANCES ---------- */
 
-        for (const e of entries) {
-            await applyBalance(tx, e.accountId, e.amount);
+        for (const entry of entries) {
+            await applyBalance(
+                tx,
+                entry.accountId,
+                toDecimal(entry.amount) // ✅ simple fix
+            );
         }
 
         return serialize(trx);
@@ -260,50 +263,4 @@ export const getTransactions = async (userId: string) => {
     });
 
     return serialize(trx);
-};
-
-/* =============================
-   REBUILD BALANCE
-============================= */
-
-export const rebuildAccountBalance = async (accountId: string) => {
-
-    const entries = await prisma.ledgerEntry.findMany({
-        where: {accountId}
-    });
-
-    const balance = entries.reduce(
-        (acc, e) => acc.plus(toDecimal(e.amount)),
-        new Prisma.Decimal(0)
-    );
-
-    await prisma.account.update({
-        where: {id: accountId},
-        data: {balance}
-    });
-};
-
-/* =============================
-   COMPUTED BALANCE
-============================= */
-
-export const getAccountWithComputedBalance = async (accountId: string) => {
-
-    const entries = await prisma.ledgerEntry.findMany({
-        where: {accountId}
-    });
-
-    const computed = entries.reduce(
-        (acc, e) => acc.plus(toDecimal(e.amount)),
-        new Prisma.Decimal(0)
-    );
-
-    const account = await prisma.account.findUnique({
-        where: {id: accountId}
-    });
-
-    return serialize({
-        ...account,
-        computedBalance: computed
-    });
 };
