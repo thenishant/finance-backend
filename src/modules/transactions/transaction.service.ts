@@ -1,22 +1,71 @@
 import {prisma} from "../../database/prisma";
 import {Prisma} from "@prisma/client";
 
+/* =============================
+   HELPERS
+============================= */
+
+const toDecimal = (value: any): Prisma.Decimal =>
+    value instanceof Prisma.Decimal
+        ? value
+        : new Prisma.Decimal(value);
+
+const serialize = (obj: any) =>
+    JSON.parse(
+        JSON.stringify(obj, (_, v) =>
+            v instanceof Prisma.Decimal ? v.toString() : v
+        )
+    );
+
+const applyBalance = async (
+    tx: any,
+    accountId: string,
+    amount: any
+) => {
+    const amt = toDecimal(amount);
+
+    return tx.account.update({
+        where: {id: accountId},
+        data: {
+            balance: amt.gt(0)
+                ? {increment: amt}
+                : {decrement: amt.abs()}
+        }
+    });
+};
+
+/* =============================
+   CREATE TRANSACTION
+============================= */
+
 export const createTransaction = async (userId: string, data: any) => {
     return prisma.$transaction(async (tx) => {
 
-        // ✅ 1. Idempotency check
+        /* ---------- VALIDATION ---------- */
+
+        if (!data.type) {
+            throw new Error("Transaction type is required");
+        }
+
+        const type = data.type;
+
+        /* ---------- IDEMPOTENCY ---------- */
+
         if (data.idempotencyKey) {
             const existing = await tx.transaction.findUnique({
                 where: {idempotencyKey: data.idempotencyKey}
             });
 
-            if (existing) return existing;
+            if (existing) return serialize(existing);
         }
 
-        const amount = new Prisma.Decimal(data.amount);
+        /* ---------- NORMALIZE ---------- */
+
+        const amount = toDecimal(data.amount);
         const date = new Date(data.date);
 
-        // ✅ 2. Validate accounts
+        /* ---------- FETCH ACCOUNTS ---------- */
+
         const fromAccount = data.fromAccountId
             ? await tx.account.findFirst({
                 where: {id: data.fromAccountId, userId}
@@ -29,97 +78,95 @@ export const createTransaction = async (userId: string, data: any) => {
             })
             : null;
 
-        if (data.type === "EXPENSE" || data.type === "INVESTMENT") {
-            if (!fromAccount) throw new Error("fromAccountId required");
+        /* ---------- BUSINESS RULES ---------- */
+
+        if (["EXPENSE", "INVESTMENT"].includes(type) && !fromAccount) {
+            throw new Error("fromAccountId required");
         }
 
-        if (data.type === "INCOME") {
-            if (!toAccount) throw new Error("toAccountId required");
+        if (type === "INCOME" && !toAccount) {
+            throw new Error("toAccountId required");
         }
 
-        if (data.type === "TRANSFER") {
-            if (!fromAccount || !toAccount)
+        if (type === "TRANSFER") {
+            if (!fromAccount || !toAccount) {
                 throw new Error("Both accounts required");
+            }
 
-            if (fromAccount.id === toAccount.id)
+            if (fromAccount.id === toAccount.id) {
                 throw new Error("Cannot transfer to same account");
+            }
         }
 
-        // ✅ 3. Create transaction
+        /* ---------- CATEGORY ---------- */
+
+        const categoryId =
+            type === "TRANSFER" ? null : data.categoryId;
+
+        if (type !== "TRANSFER" && !categoryId) {
+            throw new Error("categoryId required");
+        }
+
+        /* ---------- CREATE TRANSACTION ---------- */
+
         const trx = await tx.transaction.create({
             data: {
                 userId,
-                type: data.type,
+                type,
                 amount,
                 date,
                 year: date.getFullYear(),
                 month: date.getMonth() + 1,
-                categoryId: data.categoryId,
-                fromAccountId: data.fromAccountId,
-                toAccountId: data.toAccountId,
+                categoryId,
+                fromAccountId: data.fromAccountId ?? null,
+                toAccountId: data.toAccountId ?? null,
                 paymentMethod: data.paymentMethod,
-                note: data.note,
-                idempotencyKey: data.idempotencyKey
+                note: data.note ?? null,
+                idempotencyKey: data.idempotencyKey ?? null
             }
         });
 
-        // ✅ 4. Build ledger entries
-        const entries: any[] = [];
+        /* ---------- LEDGER ENTRIES ---------- */
 
-        if (data.type === "EXPENSE" || data.type === "INVESTMENT") {
+        const entries: Prisma.LedgerEntryCreateManyInput[] = [];
+
+        const pushEntry = (accountId: string, amt: Prisma.Decimal) => {
             entries.push({
                 userId,
-                accountId: data.fromAccountId,
+                accountId,
                 transactionId: trx.id,
-                amount: amount.negated()
+                amount: amt
             });
+        };
+
+        if (["EXPENSE", "INVESTMENT"].includes(type)) {
+            pushEntry(fromAccount!.id, amount.negated());
         }
 
-        if (data.type === "INCOME") {
-            entries.push({
-                userId,
-                accountId: data.toAccountId,
-                transactionId: trx.id,
-                amount: amount
-            });
+        if (type === "INCOME") {
+            pushEntry(toAccount!.id, amount);
         }
 
-        if (data.type === "TRANSFER") {
-            entries.push(
-                {
-                    userId,
-                    accountId: data.fromAccountId,
-                    transactionId: trx.id,
-                    amount: amount.negated()
-                },
-                {
-                    userId,
-                    accountId: data.toAccountId,
-                    transactionId: trx.id,
-                    amount: amount
-                }
-            );
+        if (type === "TRANSFER") {
+            pushEntry(fromAccount!.id, amount.negated());
+            pushEntry(toAccount!.id, amount);
         }
 
-        // ✅ 5. Insert ledger
         await tx.ledgerEntry.createMany({data: entries});
 
-        // ✅ 6. Update balances (cache)
-        for (const entry of entries) {
-            await tx.account.update({
-                where: {id: entry.accountId},
-                data: {
-                    balance:
-                        entry.amount.gt(0)
-                            ? {increment: entry.amount}
-                            : {decrement: entry.amount.abs()}
-                }
-            });
+        /* ---------- UPDATE BALANCES ---------- */
+
+        for (const e of entries) {
+            await applyBalance(tx, e.accountId, e.amount);
         }
 
-        return trx;
+        return serialize(trx);
     });
 };
+
+/* =============================
+   DELETE TRANSACTION
+============================= */
 
 export const deleteTransaction = async (
     userId: string,
@@ -133,42 +180,33 @@ export const deleteTransaction = async (
 
         if (!trx) throw new Error("Transaction not found");
 
-        // ✅ Get ledger entries
         const entries = await tx.ledgerEntry.findMany({
             where: {transactionId}
         });
 
-        // ✅ Reverse entries
         const reversed = entries.map(e => ({
             userId,
             accountId: e.accountId,
             transactionId: trx.id,
-            amount: new Prisma.Decimal(e.amount).negated()
+            amount: toDecimal(e.amount).negated()
         }));
 
-        // ✅ Insert reversal
         await tx.ledgerEntry.createMany({data: reversed});
 
-        // ✅ Update balances
         for (const r of reversed) {
-            await tx.account.update({
-                where: {id: r.accountId},
-                data: {
-                    balance:
-                        r.amount.gt(0)
-                            ? {increment: r.amount}
-                            : {decrement: r.amount.abs()}
-                }
-            });
+            await applyBalance(tx, r.accountId, r.amount);
         }
 
-        // ✅ Soft delete transaction
         await tx.transaction.update({
             where: {id: transactionId},
             data: {deletedAt: new Date()}
         });
     });
 };
+
+/* =============================
+   RESTORE TRANSACTION
+============================= */
 
 export const restoreTransaction = async (
     userId: string,
@@ -186,26 +224,17 @@ export const restoreTransaction = async (
             where: {transactionId}
         });
 
-        // Reverse reversal (apply again)
         const reapplied = entries.map(e => ({
             userId,
             accountId: e.accountId,
             transactionId: trx.id,
-            amount: new Prisma.Decimal(e.amount)
+            amount: toDecimal(e.amount)
         }));
 
         await tx.ledgerEntry.createMany({data: reapplied});
 
         for (const r of reapplied) {
-            await tx.account.update({
-                where: {id: r.accountId},
-                data: {
-                    balance:
-                        r.amount.gt(0)
-                            ? {increment: r.amount}
-                            : {decrement: r.amount.abs()}
-                }
-            });
+            await applyBalance(tx, r.accountId, r.amount);
         }
 
         await tx.transaction.update({
@@ -215,22 +244,27 @@ export const restoreTransaction = async (
     });
 };
 
+/* =============================
+   GET TRANSACTIONS
+============================= */
+
 export const getTransactions = async (userId: string) => {
-    return prisma.transaction.findMany({
-        where: {
-            userId,
-            deletedAt: null
-        },
+    const trx = await prisma.transaction.findMany({
+        where: {userId, deletedAt: null},
         include: {
             category: true,
             fromAccount: true,
             toAccount: true
         },
-        orderBy: {
-            date: "desc"
-        }
+        orderBy: {date: "desc"}
     });
+
+    return serialize(trx);
 };
+
+/* =============================
+   REBUILD BALANCE
+============================= */
 
 export const rebuildAccountBalance = async (accountId: string) => {
 
@@ -239,7 +273,7 @@ export const rebuildAccountBalance = async (accountId: string) => {
     });
 
     const balance = entries.reduce(
-        (acc, e) => acc.plus(e.amount),
+        (acc, e) => acc.plus(toDecimal(e.amount)),
         new Prisma.Decimal(0)
     );
 
@@ -249,6 +283,10 @@ export const rebuildAccountBalance = async (accountId: string) => {
     });
 };
 
+/* =============================
+   COMPUTED BALANCE
+============================= */
+
 export const getAccountWithComputedBalance = async (accountId: string) => {
 
     const entries = await prisma.ledgerEntry.findMany({
@@ -256,7 +294,7 @@ export const getAccountWithComputedBalance = async (accountId: string) => {
     });
 
     const computed = entries.reduce(
-        (acc, e) => acc.plus(e.amount),
+        (acc, e) => acc.plus(toDecimal(e.amount)),
         new Prisma.Decimal(0)
     );
 
@@ -264,8 +302,8 @@ export const getAccountWithComputedBalance = async (accountId: string) => {
         where: {id: accountId}
     });
 
-    return {
+    return serialize({
         ...account,
         computedBalance: computed
-    };
+    });
 };
