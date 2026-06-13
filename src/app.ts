@@ -9,6 +9,7 @@ import transactionRoutes from "./modules/transactions/transaction.routes";
 import categoriesRoutes from "./modules/categories/categories.routes";
 import analyticsRoutes from "./modules/analytics/analytics.routes";
 import investmentRoutes from "./modules/investments/investment.routes";
+import gmailRoutes from "./modules/email/gmail/gmail.routes";
 
 dotenv.config();
 
@@ -28,6 +29,7 @@ app.use('/transactions', transactionRoutes);
 app.use("/categories", categoriesRoutes);
 app.use("/analytics", analyticsRoutes);
 app.use("/investment", investmentRoutes);
+app.use("/api/gmail", gmailRoutes);
 
 app.use(errorHandler);
 
