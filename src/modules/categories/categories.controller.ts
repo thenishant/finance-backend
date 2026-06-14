@@ -9,7 +9,7 @@ export const list = async (
     next: NextFunction
 ) => {
     try {
-        const categories = await getCategoryTree(req.user!.userId);
+        const categories = await getCategoryTree(getUserId(req));
 
         return res.json({
             success: true,
@@ -26,7 +26,7 @@ export const listLeaf = async (
     next: NextFunction
 ) => {
     try {
-        const categories = await getLeafCategories(req.user!.userId);
+        const categories = await getLeafCategories(getUserId(req));
 
         return res.json({
             success: true,
@@ -47,7 +47,7 @@ export const createBulk = async (
             createCategoryGroupSchema.parse(req.body);
 
         const parent = await createCategoryGroup(
-            req.user!.userId,
+            getUserId(req),
             validated
         );
 

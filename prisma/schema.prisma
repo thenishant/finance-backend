@@ -14,31 +14,14 @@ model User {
   authProvider     AuthProvider       @default(EMAIL)
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
-  accounts         Account[]
   categories       Category[]
   transactions     Transaction[]
   investmentGoals  InvestmentGoal[]
   monthlyAnalytics MonthlyAnalytics[]
   ledgerEntries    LedgerEntry[]
 
-  gmailAccount GmailAccount?
-}
-
-model Account {
-  id               String        @id @default(uuid())
-  userId           String
-  name             String
-  type             AccountType
-  balance          Decimal       @db.Decimal(18, 2)
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
-  deletedAt        DateTime?
-  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  transactionsFrom Transaction[] @relation("FromAccount")
-  transactionsTo   Transaction[] @relation("ToAccount")
-  ledgerEntries    LedgerEntry[]
-
-  @@index([userId])
+  gmailAccount      GmailAccount?
+  financialAccounts FinancialAccount[]
 }
 
 model Category {
@@ -60,57 +43,62 @@ model Category {
 }
 
 model Transaction {
-  id                String            @id @default(uuid())
-  userId            String
-  type              TransactionType
-  amount            Decimal           @db.Decimal(18, 2)
-  date              DateTime
-  year              Int
-  month             Int
-  merchant          String?
-  source            TransactionSource @default(MANUAL)
-  externalReference String?
-  fingerprint       String?           @unique
-  gmailMessageId    String?
-  gmailMessage      GmailMessage?     @relation(fields: [gmailMessageId], references: [id])
-  categoryId        String?
-  fromAccountId     String?
-  toAccountId       String?
-  paymentMethod     PaymentMethod     @default(BANK)
-  note              String?
-  idempotencyKey    String?           @unique
-  metadata          Json?
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
-  deletedAt         DateTime?
-  user              User              @relation(fields: [userId], references: [id], onDelete: Cascade)
-  category          Category?         @relation(fields: [categoryId], references: [id])
-  fromAccount       Account?          @relation("FromAccount", fields: [fromAccountId], references: [id])
-  toAccount         Account?          @relation("ToAccount", fields: [toAccountId], references: [id])
-  ledgerEntries     LedgerEntry[]
+  id                   String            @id @default(uuid())
+  userId               String
+  user                 User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type                 TransactionType
+  amount               Decimal           @db.Decimal(18, 2)
+  originalAmount       Decimal?          @db.Decimal(18, 2)
+  date                 DateTime
+  year                 Int
+  month                Int
+  merchant             String?
+  note                 String?
+  categoryId           String?
+  category             Category?         @relation(fields: [categoryId], references: [id])
+  sourceAccountId      String?
+  destinationAccountId String?
+  sourceAccount        FinancialAccount? @relation("SourceAccount", fields: [sourceAccountId], references: [id])
+  destinationAccount   FinancialAccount? @relation("DestinationAccount", fields: [destinationAccountId], references: [id])
+  source               TransactionSource @default(MANUAL)
+  externalReference    String?
+  fingerprint          String?           @unique
+  gmailMessageId       String?
+  gmailMessage         GmailMessage?     @relation(fields: [gmailMessageId], references: [id])
+  idempotencyKey       String?           @unique
+  metadata             Json?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  deletedAt            DateTime?
+  ledgerEntries        LedgerEntry[]
+  status               TransactionStatus @default(COMPLETED)
+  currency             String            @default("INR")
+  exchangeRate         Decimal?          @db.Decimal(18, 6)
+  merchantNormalized   String?
 
   @@index([userId])
+  @@index([date])
   @@index([userId, year])
   @@index([userId, year, month])
   @@index([userId, year, month, type])
   @@index([categoryId])
-  @@index([fromAccountId])
-  @@index([toAccountId])
+  @@index([sourceAccountId])
+  @@index([destinationAccountId])
   @@index([gmailMessageId])
 }
 
 model LedgerEntry {
-  id            String      @id @default(uuid())
-  userId        String
-  accountId     String
-  transactionId String
-  amount        Decimal     @db.Decimal(18, 2)
-  createdAt     DateTime    @default(now())
-  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  account       Account     @relation(fields: [accountId], references: [id])
-  transaction   Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  id                 String           @id @default(uuid())
+  userId             String
+  financialAccountId String
+  transactionId      String
+  amount             Decimal          @db.Decimal(18, 2)
+  createdAt          DateTime         @default(now())
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  financialAccount   FinancialAccount @relation(fields: [financialAccountId], references: [id])
+  transaction        Transaction      @relation(fields: [transactionId], references: [id], onDelete: Cascade)
 
-  @@index([accountId])
+  @@index([financialAccountId])
   @@index([transactionId])
   @@index([userId])
 }
@@ -167,9 +155,61 @@ model GmailMessage {
   processed      Boolean       @default(false)
   createdAt      DateTime      @default(now())
   transactions   Transaction[]
+  receivedAt     DateTime?
 
   @@index([gmailAccountId])
   @@index([processed])
+}
+
+model FinancialAccount {
+  id                   String               @id @default(uuid())
+  userId               String
+  name                 String
+  type                 FinancialAccountType
+  provider             String?
+  last4                String?
+  currentBalance       Decimal              @default(0) @db.Decimal(18, 2)
+  availableBalance     Decimal?             @db.Decimal(18, 2)
+  creditLimit          Decimal?             @db.Decimal(18, 2)
+  isActive             Boolean              @default(true)
+  metadata             Json?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  deletedAt            DateTime?
+  isArchived           Boolean              @default(false)
+  user                 User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  outgoingTransactions Transaction[]        @relation("SourceAccount")
+  incomingTransactions Transaction[]        @relation("DestinationAccount")
+  ledgerEntries        LedgerEntry[]
+  nickname             String?
+  emailMatchers        Json?
+  externalReference    String?
+  balanceUpdatedAt     DateTime?
+  institutionName      String?
+  sortOrder            Int                  @default(0)
+
+  @@index([userId, isArchived])
+  @@index([userId, name])
+  @@index([userId])
+  @@index([type])
+  @@index([last4])
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum FinancialAccountType {
+  BANK_ACCOUNT
+  CREDIT_CARD
+  DEBIT_CARD
+  CASH
+  INVESTMENT
+  LOAN
+  WALLET
 }
 
 enum TransactionSource {
@@ -182,21 +222,9 @@ enum AuthProvider {
   GOOGLE
 }
 
-enum AccountType {
-  SAVING
-  CURRENT
-  INVESTMENT
-}
-
 enum TransactionType {
   INCOME
   EXPENSE
   TRANSFER
   INVESTMENT
-}
-
-enum PaymentMethod {
-  CASH
-  BANK
-  CREDIT_CARD
 }

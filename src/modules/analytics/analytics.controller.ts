@@ -6,6 +6,7 @@ import {
     getTopSpendingCategories,
     getYearlyAnalytics
 } from "./analytics.service";
+import {getUserId} from "../../shared/utils/auth.utils";
 
 export const monthly = async (
     req: AuthRequest,
@@ -21,7 +22,7 @@ export const monthly = async (
         const month = Number(req.query.month);
 
         const data = await getMonthlyAnalytics(
-            req.user!.userId,
+            getUserId(req),
             year,
             month
         );
@@ -51,7 +52,7 @@ export const yearly = async (
         console.log("1. Before service", Date.now() - start);
 
         const data = await getYearlyAnalytics(
-            req.user!.userId,
+            getUserId(req),
             year
         );
 
@@ -84,7 +85,7 @@ export const topSpending = async (
         }
 
         const data = await getTopSpendingCategories(
-            req.user!.userId,
+            getUserId(req),
             year,
             month
         );
@@ -116,7 +117,7 @@ export const monthCompare = async (
         }
 
         const data = await getMonthlyComparison(
-            req.user!.userId,
+            getUserId(req),
             year,
             month
         );

@@ -62,9 +62,8 @@ export const createTransaction = async (
         amount: number;
         date: string;
         categoryId?: string;
-        fromAccountId?: string;
-        toAccountId?: string;
-        paymentMethod: string;
+        sourceAccountId?: string;
+        destinationAccountId?: string;
         note?: string;
         idempotencyKey?: string;
     }
@@ -93,35 +92,73 @@ export const createTransaction = async (
 
         /* ---------- ACCOUNTS ---------- */
 
-        const fromAccount = data.fromAccountId
-            ? await tx.account.findFirst({where: {id: data.fromAccountId, userId}})
-            : null;
+        const fromAccount = data.sourceAccountId
 
-        const toAccount = data.toAccountId
-            ? await tx.account.findFirst({where: {id: data.toAccountId, userId}})
-            : null;
+            ? await tx.financialAccount.findFirst({
+                where: {
+                    id: data.sourceAccountId,
+                    userId,
+                    deletedAt: null,
+                    isArchived: false
+                }
+            }) : null;
+        const toAccount = data.destinationAccountId
+            ? await tx.financialAccount.findFirst({
+                where: {
+                    id: data.destinationAccountId,
+                    userId,
+                    deletedAt: null,
+                    isArchived: false
+                }
+            }) : null;
 
         /* ---------- RULES ---------- */
 
         if (data.type === "INCOME" && !toAccount)
-            throw new Error("Invalid toAccountId");
+            throw new Error("Invalid destinationAccountId");
 
         if (
-            (data.type === "EXPENSE" || data.type === "INVESTMENT") &&
+            (data.type === "EXPENSE" ||
+                data.type === "INVESTMENT") &&
             !fromAccount
         )
-            throw new Error("Invalid fromAccountId");
+            throw new Error("Invalid sourceAccountId");
 
         if (data.type === "TRANSFER") {
             if (!fromAccount || !toAccount)
                 throw new Error("Both accounts required");
+
             if (fromAccount.id === toAccount.id)
-                throw new Error("Same account transfer");
+                throw new Error("Cannot transfer to same account");
         }
 
-        if (data.type !== "TRANSFER" && !data.categoryId)
+        if (
+            data.type !== "TRANSFER" &&
+            !data.categoryId
+        )
             throw new Error("categoryId required");
 
+        if (data.categoryId) {
+
+            const category = await tx.category.findFirst({
+
+                where: {
+
+                    id: data.categoryId,
+
+                    userId
+
+                }
+
+            });
+
+            if (!category) {
+
+                throw new Error("Invalid categoryId");
+
+            }
+
+        }
         /* ---------- CREATE ---------- */
 
         const trx = await tx.transaction.create({
@@ -133,9 +170,8 @@ export const createTransaction = async (
                 year,
                 month,
                 categoryId: data.type === "TRANSFER" ? null : data.categoryId,
-                fromAccountId: data.fromAccountId ?? null,
-                toAccountId: data.toAccountId ?? null,
-                paymentMethod: data.paymentMethod as any,
+                sourceAccountId: data.sourceAccountId ?? null,
+                destinationAccountId: data.destinationAccountId ?? null,
                 note: data.note ?? null,
                 idempotencyKey: data.idempotencyKey ?? null,
             }
@@ -144,28 +180,48 @@ export const createTransaction = async (
         /* ---------- BALANCE ---------- */
 
         if (data.type === "EXPENSE" || data.type === "INVESTMENT") {
-            await tx.account.update({
+            await tx.financialAccount.update({
                 where: {id: fromAccount!.id},
-                data: {balance: {decrement: amount}}
+                data: {
+                    currentBalance: {
+                        decrement: amount
+                    },
+                    balanceUpdatedAt: new Date()
+                }
             });
         }
 
         if (data.type === "INCOME") {
-            await tx.account.update({
+            await tx.financialAccount.update({
                 where: {id: toAccount!.id},
-                data: {balance: {increment: amount}}
+                data: {
+                    currentBalance: {
+                        increment: amount
+                    },
+                    balanceUpdatedAt: new Date()
+                }
             });
         }
 
         if (data.type === "TRANSFER") {
             await Promise.all([
-                tx.account.update({
+                tx.financialAccount.update({
                     where: {id: fromAccount!.id},
-                    data: {balance: {decrement: amount}}
+                    data: {
+                        currentBalance: {
+                            decrement: amount
+                        },
+                        balanceUpdatedAt: new Date()
+                    }
                 }),
-                tx.account.update({
+                tx.financialAccount.update({
                     where: {id: toAccount!.id},
-                    data: {balance: {increment: amount}}
+                    data: {
+                        currentBalance: {
+                            increment: amount
+                        },
+                        balanceUpdatedAt: new Date()
+                    }
                 })
             ]);
         }
@@ -197,28 +253,48 @@ export const deleteTransaction = async (
         const amount = trx.amount;
 
         if (trx.type === "EXPENSE" || trx.type === "INVESTMENT") {
-            await tx.account.update({
-                where: {id: trx.fromAccountId!},
-                data: {balance: {increment: amount}}
+            await tx.financialAccount.update({
+                where: {id: trx.sourceAccountId!},
+                data: {
+                    currentBalance: {
+                        increment: amount
+                    },
+                    balanceUpdatedAt: new Date()
+                }
             });
         }
 
         if (trx.type === "INCOME") {
-            await tx.account.update({
-                where: {id: trx.toAccountId!},
-                data: {balance: {decrement: amount}}
+            await tx.financialAccount.update({
+                where: {id: trx.destinationAccountId!},
+                data: {
+                    currentBalance: {
+                        decrement: amount
+                    },
+                    balanceUpdatedAt: new Date()
+                }
             });
         }
 
         if (trx.type === "TRANSFER") {
             await Promise.all([
-                tx.account.update({
-                    where: {id: trx.fromAccountId!},
-                    data: {balance: {increment: amount}}
+                tx.financialAccount.update({
+                    where: {id: trx.sourceAccountId!},
+                    data: {
+                        currentBalance: {
+                            increment: amount
+                        },
+                        balanceUpdatedAt: new Date()
+                    }
                 }),
-                tx.account.update({
-                    where: {id: trx.toAccountId!},
-                    data: {balance: {decrement: amount}}
+                tx.financialAccount.update({
+                    where: {id: trx.destinationAccountId!},
+                    data: {
+                        currentBalance: {
+                            decrement: amount
+                        },
+                        balanceUpdatedAt: new Date()
+                    }
                 })
             ]);
         }
@@ -261,28 +337,48 @@ export const restoreTransaction = async (
         const amount = trx.amount;
 
         if (trx.type === "EXPENSE" || trx.type === "INVESTMENT") {
-            await tx.account.update({
-                where: {id: trx.fromAccountId!},
-                data: {balance: {decrement: amount}}
+            await tx.financialAccount.update({
+                where: {id: trx.sourceAccountId!},
+                data: {
+                    currentBalance: {
+                        decrement: amount
+                    },
+                    balanceUpdatedAt: new Date()
+                }
             });
         }
 
         if (trx.type === "INCOME") {
-            await tx.account.update({
-                where: {id: trx.toAccountId!},
-                data: {balance: {increment: amount}}
+            await tx.financialAccount.update({
+                where: {id: trx.destinationAccountId!},
+                data: {
+                    currentBalance: {
+                        increment: amount
+                    },
+                    balanceUpdatedAt: new Date()
+                }
             });
         }
 
         if (trx.type === "TRANSFER") {
             await Promise.all([
-                tx.account.update({
-                    where: {id: trx.fromAccountId!},
-                    data: {balance: {decrement: amount}}
+                tx.financialAccount.update({
+                    where: {id: trx.sourceAccountId!},
+                    data: {
+                        currentBalance: {
+                            decrement: amount
+                        },
+                        balanceUpdatedAt: new Date()
+                    }
                 }),
-                tx.account.update({
-                    where: {id: trx.toAccountId!},
-                    data: {balance: {increment: amount}}
+                tx.financialAccount.update({
+                    where: {id: trx.destinationAccountId!},
+                    data: {
+                        currentBalance: {
+                            increment: amount
+                        },
+                        balanceUpdatedAt: new Date()
+                    }
                 })
             ]);
         }
@@ -315,8 +411,8 @@ export const getTransactions = async (userId: string) => {
         where: {userId, deletedAt: null},
         include: {
             category: true,
-            fromAccount: true,
-            toAccount: true
+            sourceAccount: true,
+            destinationAccount: true
         },
         orderBy: {date: "desc"}
     });

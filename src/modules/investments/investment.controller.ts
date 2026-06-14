@@ -8,7 +8,7 @@ export const setGoal = async (
 ) => {
     try {
 
-        const userId = req.user!.userId;
+        const userId = getUserId(req);
         const {year, month, goalPercent} = req.body;
 
         if (!year || goalPercent === undefined) {

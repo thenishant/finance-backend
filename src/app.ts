@@ -4,12 +4,12 @@ import helmet from 'helmet';
 import dotenv from 'dotenv';
 import authRoutes from './modules/auth/auth.routes';
 import errorHandler from './shared/middleware/errorHandler';
-import accountRoutes from "./modules/accounts/account.routes";
 import transactionRoutes from "./modules/transactions/transaction.routes";
 import categoriesRoutes from "./modules/categories/categories.routes";
 import analyticsRoutes from "./modules/analytics/analytics.routes";
 import investmentRoutes from "./modules/investments/investment.routes";
 import gmailRoutes from "./modules/email/gmail/gmail.routes";
+import financialAccountRoutes from "./modules/financial-account/financial-account.routes";
 
 dotenv.config();
 
@@ -24,13 +24,12 @@ app.use(cors());
 app.use(express.json());
 
 app.use('/auth', authRoutes);
-app.use('/accounts', accountRoutes);
 app.use('/transactions', transactionRoutes);
 app.use("/categories", categoriesRoutes);
 app.use("/analytics", analyticsRoutes);
 app.use("/investment", investmentRoutes);
 app.use("/api/gmail", gmailRoutes);
-
+app.use("/financial-accounts", financialAccountRoutes);
 app.use(errorHandler);
 
 export default app;
