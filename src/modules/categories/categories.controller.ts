@@ -1,10 +1,11 @@
-import {NextFunction, Response} from "express";
+import {Request, Response, NextFunction} from "express";
 import {AuthRequest} from "../../shared/middleware/auth.middleware";
 import {createCategoryGroup, getCategoryTree, getLeafCategories} from "./categories.service";
 import {createCategoryGroupSchema} from "./category.dto";
+import {getUserId} from "../../shared/utils/auth.utils";
 
 export const list = async (
-    req: AuthRequest,
+    req: Request,
     res: Response,
     next: NextFunction
 ) => {
@@ -21,7 +22,7 @@ export const list = async (
 };
 
 export const listLeaf = async (
-    req: AuthRequest,
+    req: Request,
     res: Response,
     next: NextFunction
 ) => {
@@ -38,7 +39,7 @@ export const listLeaf = async (
 };
 
 export const createBulk = async (
-    req: AuthRequest,
+    req: Request,
     res: Response,
     next: NextFunction
 ) => {

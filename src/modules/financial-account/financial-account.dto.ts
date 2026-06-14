@@ -1,7 +1,6 @@
 import {FinancialAccountType} from "@prisma/client";
 import {z} from "zod";
 
-let ACCOUNT_TYPES = ["BANK_ACCOUNT", "CREDIT_CARD", "DEBIT_CARD", "CASH", "INVESTMENT", "LOAN", "WALLET"];
 export const createFinancialAccountSchema = z.object({
     name: z.string().min(1),
     nickname: z.string().optional(),

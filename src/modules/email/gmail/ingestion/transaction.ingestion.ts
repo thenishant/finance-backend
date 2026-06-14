@@ -3,7 +3,7 @@ import {prisma} from "../../../../database/prisma";
 
 import {parseEmail} from "../parsers/parser.factory";
 import {BankProvider, detectBankProvider} from "../detector/bank.detector";
-import {PaymentMethod, TransactionSource} from "@prisma/client";
+import {FinancialAccountType, TransactionSource} from "@prisma/client";
 
 // export const processGmailMessage = async (
 //     gmailMessageId: string
@@ -197,7 +197,7 @@ export const processGmailMessage = async (gmailMessageId: string) => {
 
         paymentMethod:
 
-        PaymentMethod.CREDIT_CARD,
+        FinancialAccountType.CREDIT_CARD,
 
         note:
 

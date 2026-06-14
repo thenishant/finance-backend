@@ -6,6 +6,7 @@ import {syncMailbox} from "./gmail.service";
 import {parseEmail} from "./parsers/parser.factory";
 import {detectBankProvider} from "./detector/bank.detector";
 import {processGmailMessage} from "./ingestion/transaction.ingestion";
+import {getParamId, getUserId} from "../../../shared/utils/auth.utils";
 
 export const googleCallback = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -132,9 +133,15 @@ export const syncGmail = async (req: Request, res: Response, next: NextFunction)
 
 export const testParser = async (req: Request, res: Response, next: NextFunction) => {
     try {
-
-        const gmailMessageId = req.params.gmailMessageId;
-
+        const gmailMessageId = getParamId(req.params.gmailMessageId);
+        if (!gmailMessageId || Array.isArray(gmailMessageId)) {
+            return res.status(400).json({
+                success: false,
+                error: {
+                    message: "Invalid gmailMessageId"
+                }
+            });
+        }
         const gmailMessage = await prisma.gmailMessage.findUnique({
             where: {
                 id: gmailMessageId
@@ -150,40 +157,27 @@ export const testParser = async (req: Request, res: Response, next: NextFunction
         }
 
         const provider = detectBankProvider(gmailMessage.sender);
-
         const parsed = parseEmail(provider, gmailMessage.subject, gmailMessage.body);
-
         return res.json({
             success: true, data: {
                 provider, sender: gmailMessage.sender, subject: gmailMessage.subject, parsed
             }
         });
-
     } catch (error) {
         next(error);
     }
 };
 
 export const processExistingEmails = async (req: Request, res: Response, next: NextFunction) => {
-
     try {
-
-        const userId = req.user?.userId;
-
+        const userId = getUserId(req);
         if (!userId) {
-
             return res.status(401).json({
-
                 success: false,
-
                 error: {
-
                     message: "Unauthorized"
-
                 }
-
             });
-
         }
         const messages = await prisma.gmailMessage.findMany({
             where: {
@@ -193,21 +187,15 @@ export const processExistingEmails = async (req: Request, res: Response, next: N
             }
         });
         for (const message of messages) {
-
             try {
-
                 await processGmailMessage(message.id);
-
             } catch (error) {
-
                 console.error("FAILED", message.id, error);
             }
         }
-
         return res.json({
             success: true, count: messages.length
         });
-
     } catch (error) {
         next(error);
     }

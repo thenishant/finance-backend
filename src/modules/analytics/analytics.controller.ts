@@ -1,4 +1,4 @@
-import {NextFunction, Response} from "express";
+import {Request, Response, NextFunction} from "express";
 import {AuthRequest} from "../../shared/middleware/auth.middleware";
 import {
     getMonthlyAnalytics,
@@ -9,7 +9,7 @@ import {
 import {getUserId} from "../../shared/utils/auth.utils";
 
 export const monthly = async (
-    req: AuthRequest,
+    req: Request,
     res: Response,
     next: NextFunction
 ) => {
@@ -39,7 +39,7 @@ export const monthly = async (
 };
 
 export const yearly = async (
-    req: AuthRequest,
+    req: Request,
     res: Response,
     next: NextFunction
 ) => {
@@ -69,7 +69,7 @@ export const yearly = async (
 };
 
 export const topSpending = async (
-    req: AuthRequest,
+    req: Request,
     res: Response,
     next: NextFunction
 ) => {
@@ -101,7 +101,7 @@ export const topSpending = async (
 };
 
 export const monthCompare = async (
-    req: AuthRequest,
+    req: Request,
     res: Response,
     next: NextFunction
 ) => {

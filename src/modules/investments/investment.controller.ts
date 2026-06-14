@@ -1,16 +1,14 @@
-import {Response} from "express";
-import {AuthRequest} from "../../shared/middleware/auth.middleware";
+import {Response, Request} from "express";
 import {setInvestmentGoal} from "./investment.service";
+import {getUserId} from "../../shared/utils/auth.utils";
 
 export const setGoal = async (
-    req: AuthRequest,
+    req: Request,
     res: Response
 ) => {
     try {
-
         const userId = getUserId(req);
         const {year, month, goalPercent} = req.body;
-
         if (!year || goalPercent === undefined) {
             return res.status(400).json({
                 success: false,
@@ -43,11 +41,8 @@ export const setGoal = async (
             success: true,
             data: goal
         });
-
     } catch (error) {
-
         console.error("setInvestmentGoal error:", error);
-
         return res.status(500).json({
             success: false,
             error: {message: "Failed to set investment goal"}
