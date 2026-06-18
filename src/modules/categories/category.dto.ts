@@ -1,4 +1,5 @@
 import {z} from "zod";
+import {TransactionType} from "@prisma/client";
 
 export const createCategoryGroupSchema = z.object({
     name: z.string().trim().min(1, "Category name is required"),

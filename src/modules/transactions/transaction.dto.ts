@@ -1,4 +1,5 @@
 import {z} from "zod";
+import {TransactionType} from "@prisma/client";
 
 export const createTransactionSchema = z.object({
     type: z.enum([TransactionType.EXPENSE, TransactionType.INCOME, TransactionType.TRANSFER, TransactionType.INVESTMENT]),
