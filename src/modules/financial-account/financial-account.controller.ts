@@ -3,7 +3,7 @@ import {createFinancialAccountSchema, updateFinancialAccountSchema} from "./fina
 import * as financialAccountService from "./financial-account.service";
 import {getFinancialAccountTransactions} from "./financial-account.service";
 import {getParamId, getUserId} from "../../shared/utils/auth.utils";
-import {getAccountBalance, getAccountBalances,} from "../ledger/account-balance.service";
+import {getAccountBalance, getAccountBalances} from "../ledger/account-balance.service";
 
 export const create = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
@@ -112,6 +112,32 @@ export const getAccountBalanceForSingleAccount = async (req: Request, res: Respo
         const balance = await getAccountBalance(getParamId(req.params.id));
         return res.json({
             success: true, data: {balance},
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const getOverallBalance = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const accounts = await financialAccountService
+            .getFinancialAccounts(getUserId(req));
+
+        const balances = await getAccountBalances(
+            accounts.map(account => account.id)
+        );
+
+        let total = 0;
+
+        for (const balance of balances.values()) {
+            total += Number(balance);
+        }
+
+        return res.json({
+            success: true,
+            data: {
+                balance: total,
+            },
         });
     } catch (error) {
         next(error);

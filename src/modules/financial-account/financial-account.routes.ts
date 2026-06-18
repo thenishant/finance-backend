@@ -9,4 +9,5 @@ router.patch("/:id", authenticate, controller.update);
 router.delete("/:id", authenticate, controller.remove);
 router.get("/:id/transactions", authenticate, controller.getFinancialAccountAllTransactions);
 router.patch("/:id/archive", authenticate, controller.archive);
+router.get("/balance", authenticate, controller.getOverallBalance);
 export default router;
