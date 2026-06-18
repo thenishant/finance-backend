@@ -1,5 +1,4 @@
-import {Request, Response, NextFunction} from "express";
-import {AuthRequest} from "../../shared/middleware/auth.middleware";
+import {NextFunction, Request, Response} from "express";
 import {
     getMonthlyAnalytics,
     getMonthlyComparison,
@@ -14,24 +13,11 @@ export const monthly = async (
     next: NextFunction
 ) => {
     const label = `monthly-${Date.now()}`;
-
-    console.time(label);
-
     try {
         const year = Number(req.query.year);
         const month = Number(req.query.month);
-
-        const data = await getMonthlyAnalytics(
-            getUserId(req),
-            year,
-            month
-        );
-
-        return res.json({
-            success: true,
-            data
-        });
-
+        const data = await getMonthlyAnalytics(getUserId(req), year, month);
+        return res.json({success: true, data});
     } catch (error) {
         console.timeEnd(label);
         next(error);
@@ -44,25 +30,16 @@ export const yearly = async (
     next: NextFunction
 ) => {
     const start = Date.now();
-
     try {
-
         const year = Number(req.query.year);
-
-        console.log("1. Before service", Date.now() - start);
-
         const data = await getYearlyAnalytics(
             getUserId(req),
             year
         );
-
-        console.log("2. After service", Date.now() - start);
-
         return res.json({
             success: true,
             data
         });
-
     } catch (error) {
         next(error);
     }
@@ -76,7 +53,6 @@ export const topSpending = async (
     try {
         const year = Number(req.query.year);
         const month = Number(req.query.month);
-
         if (!year || !month) {
             return res.status(400).json({
                 success: false,
@@ -89,12 +65,10 @@ export const topSpending = async (
             year,
             month
         );
-
         return res.json({
             success: true,
             data
         });
-
     } catch (error) {
         next(error);
     }
@@ -108,25 +82,21 @@ export const monthCompare = async (
     try {
         const year = Number(req.query.year);
         const month = Number(req.query.month);
-
         if (!year || !month) {
             return res.status(400).json({
                 success: false,
                 error: {message: "Year and month are required"}
             });
         }
-
         const data = await getMonthlyComparison(
             getUserId(req),
             year,
             month
         );
-
         return res.json({
             success: true,
             data
         });
-
     } catch (error) {
         next(error);
     }

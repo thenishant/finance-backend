@@ -91,12 +91,12 @@ model LedgerEntry {
   id                 String           @id @default(uuid())
   userId             String
   financialAccountId String
-  transactionId      String
+  transactionId      String?
   amount             Decimal          @db.Decimal(18, 2)
   createdAt          DateTime         @default(now())
   user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   financialAccount   FinancialAccount @relation(fields: [financialAccountId], references: [id])
-  transaction        Transaction      @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  transaction        Transaction?     @relation(fields: [transactionId], references: [id], onDelete: Cascade)
 
   @@index([financialAccountId])
   @@index([transactionId])
@@ -167,9 +167,7 @@ model FinancialAccount {
   name                 String
   type                 FinancialAccountType
   provider             String?
-  last4                String?
-  currentBalance       Decimal              @default(0) @db.Decimal(18, 2)
-  availableBalance     Decimal?             @db.Decimal(18, 2)
+  last4                String
   creditLimit          Decimal?             @db.Decimal(18, 2)
   isActive             Boolean              @default(true)
   metadata             Json?
@@ -184,7 +182,6 @@ model FinancialAccount {
   nickname             String?
   emailMatchers        Json?
   externalReference    String?
-  balanceUpdatedAt     DateTime?
   institutionName      String?
   sortOrder            Int                  @default(0)
 

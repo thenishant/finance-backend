@@ -98,7 +98,7 @@ const createDefaultCategories = async (
             {name: "Entertainment", children: ["Movies", "Subscriptions"]}
         ],
         INCOME: [
-            {name: "Income", children: ["Salary", "Bonus", "Freelance"]}
+            {name: TransactionType.INCOME, children: ["Salary", "Bonus", "Freelance"]}
         ],
         TRANSFER: [],
         INVESTMENT: []

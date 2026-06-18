@@ -1,5 +1,4 @@
-import {Request, Response, NextFunction} from "express";
-import {AuthRequest} from "../../shared/middleware/auth.middleware";
+import {NextFunction, Request, Response} from "express";
 import {createCategoryGroup, getCategoryTree, getLeafCategories} from "./categories.service";
 import {createCategoryGroupSchema} from "./category.dto";
 import {getUserId} from "../../shared/utils/auth.utils";
@@ -11,7 +10,6 @@ export const list = async (
 ) => {
     try {
         const categories = await getCategoryTree(getUserId(req));
-
         return res.json({
             success: true,
             data: categories
@@ -28,7 +26,6 @@ export const listLeaf = async (
 ) => {
     try {
         const categories = await getLeafCategories(getUserId(req));
-
         return res.json({
             success: true,
             data: categories
@@ -44,14 +41,11 @@ export const createBulk = async (
     next: NextFunction
 ) => {
     try {
-        const validated =
-            createCategoryGroupSchema.parse(req.body);
-
+        const validated = createCategoryGroupSchema.parse(req.body);
         const parent = await createCategoryGroup(
             getUserId(req),
             validated
         );
-
         return res.status(201).json({
             success: true,
             data: parent

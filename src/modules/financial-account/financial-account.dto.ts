@@ -7,7 +7,7 @@ export const createFinancialAccountSchema = z.object({
     institutionName: z.string().optional(),
     type: z.nativeEnum(FinancialAccountType),
     provider: z.string().optional(),
-    last4: z.string().length(4).optional(),
+    last4: z.string().regex(/^\d{4}$/),
     currentBalance: z.number().default(0),
     availableBalance: z.number().optional(),
     creditLimit: z.number().optional()

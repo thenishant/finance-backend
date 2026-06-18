@@ -3,10 +3,10 @@ import {z} from "zod";
 export const createCategoryGroupSchema = z.object({
     name: z.string().trim().min(1, "Category name is required"),
     type: z.enum([
-        "EXPENSE",
-        "INCOME",
-        "TRANSFER",
-        "INVESTMENT"
+        TransactionType.EXPENSE,
+        TransactionType.INCOME,
+        TransactionType.TRANSFER,
+        TransactionType.INVESTMENT
     ]),
     children: z
         .array(z.string().trim().min(1))

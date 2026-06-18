@@ -351,7 +351,7 @@ export const getTopSpendingCategories = async (
         where: {
             userId,
             deletedAt: null,
-            type: "EXPENSE",
+            type: TransactionType.EXPENSE,
             year,
             month
         },
