@@ -11,3 +11,6 @@ export const createTransactionSchema = z.object({
     note: z.string().optional(),
     idempotencyKey: z.string().optional()
 });
+
+export const updateTransactionSchema = createTransactionSchema;
+export type UpdateTransactionDTO = z.infer<typeof updateTransactionSchema>;

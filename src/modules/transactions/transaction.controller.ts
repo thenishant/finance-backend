@@ -1,13 +1,13 @@
 import {NextFunction, Request, Response} from "express";
-import {createTransactionSchema} from "./transaction.dto";
-import {createTransaction, deleteTransaction, getTransactions, restoreTransaction,} from "./transaction.service";
+import {createTransactionSchema, updateTransactionSchema} from "./transaction.dto";
+import * as transactionService from "./transaction.service";
 import {getParamId, getUserId} from "../../shared/utils/auth.utils";
 
 
 export const create = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const validated = createTransactionSchema.parse(req.body);
-        const transaction = await createTransaction(getUserId(req), validated);
+        const transaction = await transactionService.createTransaction(getUserId(req), validated);
 
         return res.status(201).json({
             success: true, data: transaction,
@@ -19,7 +19,7 @@ export const create = async (req: Request, res: Response, next: NextFunction) =>
 
 export const remove = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        await deleteTransaction(getUserId(req), getParamId(req.params.id));
+        await transactionService.deleteTransaction(getUserId(req), getParamId(req.params.id));
 
         return res.json({success: true});
     } catch (error) {
@@ -28,7 +28,7 @@ export const remove = async (req: Request, res: Response, next: NextFunction) =>
 };
 export const restore = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        await restoreTransaction(getUserId(req), getParamId(req.params.id));
+        await transactionService.restoreTransaction(getUserId(req), getParamId(req.params.id));
 
         return res.json({success: true});
     } catch (error) {
@@ -37,11 +37,47 @@ export const restore = async (req: Request, res: Response, next: NextFunction) =
 };
 export const getAllTransactions = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const transactions = await getTransactions(getUserId(req));
+        const transactions = await transactionService.getTransactions(getUserId(req));
 
         return res.json({
             success: true, data: transactions,
         });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const getTransactionById = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const transaction =
+            await transactionService.getTransactionById(getUserId(req), getParamId(req.params.id));
+
+        return res.json({
+            success: true,
+            data: transaction,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const update = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+
+        const validated = updateTransactionSchema.parse(req.body);
+
+        const transaction =
+            await transactionService.updateTransaction(
+                getUserId(req),
+                getParamId(req.params.id),
+                validated
+            );
+
+        return res.json({
+            success: true,
+            data: transaction,
+        });
+
     } catch (error) {
         next(error);
     }

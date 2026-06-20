@@ -299,3 +299,249 @@ export const getTransactions = async (
 
     return serialize(trx);
 };
+
+export const getTransactionById = async (userId: string, transactionId: string) => {
+    const trx = await prisma.transaction.findFirst({
+        where: {
+            id: transactionId,
+            userId,
+            deletedAt: null,
+        },
+        include: {
+            category: true,
+            sourceAccount: true,
+            destinationAccount: true,
+        },
+    });
+
+    if (!trx) throw new Error("Transaction not found");
+    return serialize(trx);
+};
+
+export const updateTransaction = async (
+    userId: string,
+    transactionId: string,
+    data: {
+        type: TransactionType;
+        amount: number;
+        date: string;
+        categoryId?: string;
+        sourceAccountId?: string;
+        destinationAccountId?: string;
+        note?: string;
+    }
+) => {
+    return prisma.$transaction(async tx => {
+
+        const existing = await tx.transaction.findFirst({
+            where: {
+                id: transactionId,
+                userId,
+                deletedAt: null,
+            },
+        });
+
+        if (!existing) {
+            throw new Error("Transaction not found");
+        }
+
+        if (!data.type) {
+            throw new Error("Transaction type required");
+        }
+
+        const amount = new Prisma.Decimal(data.amount);
+
+        if (amount.lte(0)) {
+            throw new Error("Amount must be > 0");
+        }
+
+        const date = new Date(data.date);
+
+        if (isNaN(date.getTime())) {
+            throw new Error("Invalid date");
+        }
+
+        const year = date.getFullYear();
+        const month = date.getMonth() + 1;
+
+        /* =============================
+           ACCOUNT VALIDATION
+        ============================== */
+
+        const findAccount = (accountId?: string) =>
+            accountId
+                ? tx.financialAccount.findFirst({
+                    where: {
+                        id: accountId,
+                        userId,
+                        deletedAt: null,
+                        isArchived: false,
+                    },
+                })
+                : Promise.resolve(null);
+
+        const fromAccount =
+            await findAccount(data.sourceAccountId);
+
+        const toAccount =
+            await findAccount(data.destinationAccountId);
+
+        if (
+            data.type === TransactionType.INCOME &&
+            !toAccount
+        ) {
+            throw new Error(
+                "Invalid destination account"
+            );
+        }
+
+        if (
+            (
+                data.type === TransactionType.EXPENSE ||
+                data.type === TransactionType.INVESTMENT
+            ) &&
+            !fromAccount
+        ) {
+            throw new Error(
+                "Invalid source account"
+            );
+        }
+
+        if (
+            data.type === TransactionType.TRANSFER
+        ) {
+            if (
+                !fromAccount ||
+                !toAccount
+            ) {
+                throw new Error(
+                    "Both accounts are required"
+                );
+            }
+
+            if (
+                fromAccount.id === toAccount.id
+            ) {
+                throw new Error(
+                    "Cannot transfer to same account"
+                );
+            }
+        }
+
+        /* =============================
+           CATEGORY VALIDATION
+        ============================== */
+
+        if (
+            data.type === TransactionType.TRANSFER &&
+            data.categoryId
+        ) {
+            throw new Error(
+                "Transfers cannot have categories"
+            );
+        }
+
+        if (
+            data.type !== TransactionType.TRANSFER &&
+            !data.categoryId
+        ) {
+            throw new Error(
+                "categoryId required"
+            );
+        }
+
+        if (data.categoryId) {
+            const category =
+                await tx.category.findFirst({
+                    where: {
+                        id: data.categoryId,
+                        userId,
+                    },
+                });
+
+            if (!category) {
+                throw new Error(
+                    "Invalid categoryId"
+                );
+            }
+        }
+
+        /* =============================
+           REMOVE OLD ANALYTICS
+        ============================== */
+
+        await updateAnalytics(
+            tx,
+            userId,
+            existing.year,
+            existing.month,
+            existing.type,
+            existing.amount,
+            "decrement"
+        );
+
+        /* =============================
+           REMOVE OLD LEDGER ENTRIES
+        ============================== */
+
+        await tx.ledgerEntry.deleteMany({
+            where: {
+                transactionId: existing.id,
+            },
+        });
+
+        /* =============================
+           UPDATE TRANSACTION
+        ============================== */
+
+        const updated =
+            await tx.transaction.update({
+                where: {
+                    id: existing.id,
+                },
+                data: {
+                    type: data.type,
+                    amount,
+                    date,
+                    year,
+                    month,
+                    categoryId:
+                        data.type === TransactionType.TRANSFER
+                            ? null
+                            : data.categoryId,
+                    sourceAccountId:
+                        data.sourceAccountId ?? null,
+                    destinationAccountId:
+                        data.destinationAccountId ?? null,
+                    note: data.note ?? null,
+                },
+            });
+
+        /* =============================
+           REBUILD LEDGER
+        ============================== */
+
+        await postTransactionToLedger(
+            tx,
+            userId,
+            updated,
+            amount
+        );
+
+        /* =============================
+           APPLY NEW ANALYTICS
+        ============================== */
+
+        await updateAnalytics(
+            tx,
+            userId,
+            year,
+            month,
+            data.type,
+            amount,
+            "increment"
+        );
+
+        return serialize(updated);
+    });
+};

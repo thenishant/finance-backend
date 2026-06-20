@@ -1,5 +1,5 @@
 import {PrismaClient, TransactionType} from "@prisma/client";
-import {createTransaction, deleteTransaction, restoreTransaction,} from "./transaction.service";
+import {createTransaction, deleteTransaction, restoreTransaction, updateTransaction,} from "./transaction.service";
 import {describe, it, expect, beforeEach, afterEach,} from "vitest";
 
 const prisma = new PrismaClient();
@@ -262,5 +262,189 @@ describe("transaction.service", () => {
             });
 
         expect(Number(result._sum.amount)).toBe(14000);
+    });
+
+    it("updates expense amount and rebuilds ledger", async () => {
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 1000,
+            date: new Date().toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        await updateTransaction(userId, trx.id, {
+            type: TransactionType.EXPENSE,
+            amount: 1500,
+            date: new Date().toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        const ledger = await prisma.ledgerEntry.findMany({
+            where: {
+                transactionId: trx.id,
+            },
+        });
+
+        expect(ledger).toHaveLength(1);
+        expect(Number(ledger[0].amount)).toBe(-1500);
+    });
+
+    it("converts expense to income", async () => {
+
+        const incomeCategory =
+            await prisma.category.create({
+                data: {
+                    userId,
+                    name: "Salary",
+                    type: TransactionType.INCOME,
+                },
+            });
+
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 1000,
+            date: new Date().toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        await updateTransaction(userId, trx.id, {
+            type: TransactionType.INCOME,
+            amount: 1000,
+            date: new Date().toISOString(),
+            categoryId: incomeCategory.id,
+            destinationAccountId: bank1Id,
+        });
+
+        const ledger = await prisma.ledgerEntry.findMany({
+            where: {
+                transactionId: trx.id,
+            },
+        });
+
+        expect(ledger).toHaveLength(1);
+        expect(Number(ledger[0].amount)).toBe(1000);
+    });
+
+    it("converts expense to transfer", async () => {
+
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 1000,
+            date: new Date().toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        await updateTransaction(userId, trx.id, {
+            type: TransactionType.TRANSFER,
+            amount: 1000,
+            date: new Date().toISOString(),
+            sourceAccountId: bank1Id,
+            destinationAccountId: bank2Id,
+        });
+
+        const ledger = await prisma.ledgerEntry.findMany({
+            where: {
+                transactionId: trx.id,
+            },
+        });
+
+        expect(ledger).toHaveLength(2);
+    });
+
+    it("converts transfer to expense", async () => {
+
+        const trx = await createTransaction(userId, {
+            type: TransactionType.TRANSFER,
+            amount: 1000,
+            date: new Date().toISOString(),
+            sourceAccountId: bank1Id,
+            destinationAccountId: bank2Id,
+        });
+
+        await updateTransaction(userId, trx.id, {
+            type: TransactionType.EXPENSE,
+            amount: 1000,
+            date: new Date().toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        const ledger = await prisma.ledgerEntry.findMany({
+            where: {
+                transactionId: trx.id,
+            },
+        });
+
+        expect(ledger).toHaveLength(1);
+        expect(Number(ledger[0].amount)).toBe(-1000);
+    });
+
+    it("moves expense to another account", async () => {
+
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 1000,
+            date: new Date().toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        await updateTransaction(userId, trx.id, {
+            type: TransactionType.EXPENSE,
+            amount: 1000,
+            date: new Date().toISOString(),
+            categoryId,
+            sourceAccountId: bank2Id,
+        });
+
+        const bank1 =
+            await prisma.ledgerEntry.aggregate({
+                where: {
+                    financialAccountId: bank1Id,
+                },
+                _sum: {
+                    amount: true,
+                },
+            });
+
+        const bank2 =
+            await prisma.ledgerEntry.aggregate({
+                where: {
+                    financialAccountId: bank2Id,
+                },
+                _sum: {
+                    amount: true,
+                },
+            });
+
+        expect(Number(bank1._sum.amount)).toBe(10000);
+        expect(Number(bank2._sum.amount)).toBe(-1000);
+    });
+
+    it("rejects transfer to same account during update", async () => {
+
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 1000,
+            date: new Date().toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        await expect(
+            updateTransaction(userId, trx.id, {
+                type: TransactionType.TRANSFER,
+                amount: 1000,
+                date: new Date().toISOString(),
+                sourceAccountId: bank1Id,
+                destinationAccountId: bank1Id,
+            })
+        ).rejects.toThrow(
+            "Cannot transfer to same account"
+        );
     });
 });
