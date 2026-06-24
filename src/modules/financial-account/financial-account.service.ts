@@ -209,7 +209,8 @@ export const deleteFinancialAccount =
 export const getFinancialAccountTransactions =
     async (
         userId: string,
-        accountId: string
+        accountId: string,
+        limit?: number
     ) => {
         await getAccountOrThrow(
             userId,
@@ -231,6 +232,7 @@ export const getFinancialAccountTransactions =
                     },
                 ],
             },
+            take: limit,
             include: {
                 category: true,
             },

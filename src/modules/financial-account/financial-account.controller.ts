@@ -98,7 +98,8 @@ export const archive = async (req: Request, res: Response, next: NextFunction): 
 
 export const getFinancialAccountAllTransactions = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const transactions = await getFinancialAccountTransactions(getUserId(req), getParamId(req.params.id));
+        const limit = req.query.limit ? Number(req.query.limit) : undefined;
+        const transactions = await getFinancialAccountTransactions(getUserId(req), getParamId(req.params.id), limit);
         return res.json({
             success: true, data: transactions,
         });
@@ -138,6 +139,19 @@ export const getOverallBalance = async (req: Request, res: Response, next: NextF
             data: {
                 balance: total,
             },
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const getById = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+        const account =
+            await financialAccountService.getFinancialAccountById(getUserId(req), getParamId(req.params.id));
+        res.json({
+            success: true,
+            data: account,
         });
     } catch (error) {
         next(error);
