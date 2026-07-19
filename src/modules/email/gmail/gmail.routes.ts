@@ -1,5 +1,5 @@
 import {Router} from "express";
-import {getGmailStatus, googleCallback, processExistingEmails, syncGmail, testParser} from "./gmail.controller";
+import {getGmailStatus, googleCallback, processExistingEmails, purgeStoredEmails, syncGmail} from "./gmail.controller";
 import {authenticate} from "../../../shared/middleware/auth.middleware";
 import {getGoogleUrl} from "../../auth/auth.controller";
 
@@ -9,5 +9,5 @@ router.get("/google/callback", googleCallback);
 router.get("/status", authenticate, getGmailStatus);
 router.post("/sync", authenticate, syncGmail);
 router.post("/process-existing", authenticate, processExistingEmails);
-router.get("/test-parser/:gmailMessageId", authenticate, testParser);
+router.delete("/stored-messages", authenticate, purgeStoredEmails);
 export default router;

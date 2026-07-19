@@ -1,7 +1,8 @@
 import {google} from "googleapis";
 import {prisma} from "../../../database/prisma";
-import {processGmailMessage} from "./ingestion/transaction.ingestion";
+import {ingestGmailEmail} from "./ingestion/transaction.ingestion";
 import {cleanEmailBody} from "./utils/body-cleaner";
+import {SyncGmailDTO} from "./gmail.dto";
 
 const decodeBase64 = (input?: string | null): string => {
 
@@ -33,6 +34,14 @@ const extractBody = (payload: any): string => {
     }
 
     for (const part of parts) {
+        const body = extractBody(part);
+
+        if (body) {
+            return body;
+        }
+    }
+
+    for (const part of parts) {
         if (part.mimeType === "text/html") {
             return decodeBase64(part.body?.data);
         }
@@ -41,7 +50,7 @@ const extractBody = (payload: any): string => {
     return "";
 };
 
-export const syncMailbox = async (userId: string) => {
+export const syncMailbox = async (userId: string, options: SyncGmailDTO = {}) => {
 
     const gmailAccount = await prisma.gmailAccount.findUnique({
         where: {
@@ -64,24 +73,18 @@ export const syncMailbox = async (userId: string) => {
     });
 
     const listResponse = await gmail.users.messages.list({
-        userId: "me", q: "newer_than:30d", maxResults: 100
+        userId: "me",
+        q: "from:alerts@axis.bank.in newer_than:30d",
+        maxResults: options.maxResults ?? 1,
+        pageToken: options.pageToken
     });
 
     const messages = listResponse.data.messages ?? [];
 
-    let inserted = 0;
+    let transactionsCreated = 0;
+    let duplicates = 0;
 
     for (const message of messages) {
-
-        const exists = await prisma.gmailMessage.findUnique({
-            where: {
-                gmailMessageId: message.id!
-            }
-        });
-
-        if (exists) {
-            continue;
-        }
 
         const detail = await gmail.users.messages.get({
             userId: "me", id: message.id!
@@ -97,14 +100,24 @@ export const syncMailbox = async (userId: string) => {
 
         const body = cleanEmailBody(extractBody(payload));
 
-        const savedMessage = await prisma.gmailMessage.create({
-            data: {
-                gmailMessageId: message.id!, gmailAccountId: gmailAccount.id, sender, subject, body
-            }
-        });
-        await processGmailMessage(savedMessage.id);
+        const receivedAt = detail.data.internalDate
+            ? new Date(Number(detail.data.internalDate))
+            : null;
 
-        inserted++;
+        const result = await ingestGmailEmail({
+            userId,
+            gmailMessageId: message.id!,
+            sender,
+            subject,
+            body,
+            receivedAt
+        });
+
+        if (result.status === "created") {
+            transactionsCreated++;
+        } else if (result.status === "duplicate") {
+            duplicates++;
+        }
     }
 
     await prisma.gmailAccount.update({
@@ -116,6 +129,11 @@ export const syncMailbox = async (userId: string) => {
     });
 
     return {
-        fetched: messages.length, inserted
+        fetched: messages.length,
+        transactionsCreated,
+        duplicates,
+        query: "from:alerts@axis.bank.in newer_than:30d",
+        maxResults: options.maxResults ?? 1,
+        nextPageToken: listResponse.data.nextPageToken ?? null
     };
 };

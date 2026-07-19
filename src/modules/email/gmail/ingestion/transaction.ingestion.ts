@@ -1,227 +1,258 @@
+import {createHash} from "node:crypto";
+
+import {FinancialAccountType, Prisma, TransactionSource, TransactionType,} from "@prisma/client";
+
 import {prisma} from "../../../../database/prisma";
-
-
-import {parseEmail} from "../parsers/parser.factory";
+import {postTransactionToLedger} from "../../../ledger/ledger.service";
+import {categorizeMerchant} from "../../../merchant/merchant.service";
+import {normalizeMerchantName} from "../../../merchant/merchant.normalizer";
+import {updateAnalytics} from "../../../transactions/transaction.service";
 import {BankProvider, detectBankProvider} from "../detector/bank.detector";
-import {FinancialAccountType, TransactionSource} from "@prisma/client";
+import {parseEmail} from "../parsers/parser.factory";
 
-// export const processGmailMessage = async (
-//     gmailMessageId: string
-// ) => {
-//
-//     const gmailMessage =
-//         await prisma.gmailMessage.findUnique({
-//             where: {
-//                 id: gmailMessageId
-//             },
-//             include: {
-//                 gmailAccount: true
-//             }
-//         });
-//
-//     if (!gmailMessage) {
-//         return;
-//     }
-//
-//     if (gmailMessage.processed) {
-//         return;
-//     }
-//
-//     const provider =
-//         detectBankProvider(
-//             gmailMessage.sender
-//         );
-//
-//     if (
-//         provider ===
-//         BankProvider.UNKNOWN
-//     ) {
-//         return;
-//     }
-//
-//     const parsed =
-//         parseEmail(
-//             provider,
-//             gmailMessage.subject,
-//             gmailMessage.body
-//         );
-//
-//     if (!parsed) {
-//         return;
-//     }
-//
-//     const userId =
-//         gmailMessage.gmailAccount.userId;
-//
-//     const fingerprint =
-//         crypto
-//             .createHash("sha256")
-//             .update(
-//                 JSON.stringify({
-//                     provider,
-//                     amount: parsed.amount,
-//                     merchant:
-//                     parsed.merchant,
-//                     subject:
-//                     gmailMessage.subject
-//                 })
-//             )
-//             .digest("hex");
-//
-//     const existing =
-//         await prisma.transaction.findUnique({
-//             where: {
-//                 fingerprint
-//             }
-//         });
-//
-//     if (existing) {
-//
-//         await prisma.gmailMessage.update({
-//             where: {
-//                 id: gmailMessage.id
-//             },
-//             data: {
-//                 processed: true
-//             }
-//         });
-//
-//         return;
-//     }
-//
-//     const now =
-//         new Date();
-//
-//     await prisma.transaction.create({
-//         data: {
-//             userId,
-//
-//             source: "GMAIL",
-//
-//             sourceId: gmailMessage.gmailMessageId,
-//
-//             fingerprint,
-//
-//             merchant:
-//             parsed.merchant,
-//
-//             amount:
-//             parsed.amount,
-//
-//             type:
-//             parsed.type,
-//
-//             date: now,
-//
-//             year:
-//                 now.getFullYear(),
-//
-//             month:
-//                 now.getMonth() + 1,
-//
-//             note:
-//             gmailMessage.subject,
-//
-//             rawEmailId:
-//             gmailMessage.id
-//         }
-//     });
-//
-//     await prisma.gmailMessage.update({
-//         where: {
-//             id: gmailMessage.id
-//         },
-//         data: {
-//             processed: true
-//         }
-//     });
-// };
+export interface GmailEmailForIngestion {
+    userId: string;
+    gmailMessageId: string;
+    sender?: string | null;
+    subject?: string | null;
+    body: string;
+    receivedAt?: Date | null;
+}
 
-export const processGmailMessage = async (gmailMessageId: string) => {
+export const ingestGmailEmail = async (
+    email: GmailEmailForIngestion,
+) => {
+    console.log("[GMAIL] ingestGmailEmail called");
 
-    const gmailMessage = await prisma.gmailMessage.findUnique({
-        where: {
-            id: gmailMessageId
-        }
-    });
+    const provider = detectBankProvider(email.sender);
 
-    if (!gmailMessage) {
-        return;
+    if (provider === BankProvider.UNKNOWN) {
+        return {
+            status: "unsupported" as const,
+        };
     }
 
-    const provider = detectBankProvider(gmailMessage.sender);
+    const parsed = parseEmail(
+        provider,
+        email.subject,
+        email.body,
+    );
 
-    if (provider !== BankProvider.AXIS) {
-        return;
-    }
-
-    const parsed = parseEmail(provider, gmailMessage.subject, gmailMessage.body);
+    console.log("[GMAIL] Parsed:", parsed);
 
     if (!parsed) {
-        return;
+        return {
+            status: "not-a-transaction" as const,
+        };
     }
 
-    console.log("\n====================");
+    let categoryId: string | null = null;
 
-    console.log({
+    if (
+        parsed.merchant &&
+        parsed.type !== TransactionType.TRANSFER
+    ) {
+        console.log("[GMAIL] Calling categorizeMerchant");
+        try {
+            const categorization = await categorizeMerchant({
+                userId: email.userId,
+                merchantName: parsed.merchant,
+                transactionType: parsed.type,
+            });
 
-        // userId,
+            categoryId = categorization.category.id;
 
-        type:
+            console.info("Merchant categorized", {
+                merchant: parsed.merchant,
+                normalizedMerchant: normalizeMerchantName(parsed.merchant),
+                categoryId,
+                category: categorization.category.name,
+                provider,
+            });
+        } catch (error) {
+            console.error(
+                "Merchant categorization failed",
+                {
+                    merchant: parsed.merchant,
+                    provider,
+                },
+                error,
+            );
+        }
+    }
+    const date =
+        parsed.transactionDate ??
+        email.receivedAt ??
+        new Date();
 
-        parsed.type,
+    const fingerprint = createHash("sha256")
+        .update(
+            `gmail:${email.userId}:${email.gmailMessageId}`,
+        )
+        .digest("hex");
 
-        amount:
+    try {
+        return await prisma.$transaction(async tx => {
 
-        parsed.amount,
+            const existing =
+                await tx.transaction.findUnique({
+                    where: {
+                        fingerprint,
+                    },
+                });
 
-        date:
+            if (existing) {
+                return {
+                    status: "duplicate" as const,
+                    transactionId: existing.id,
+                };
+            }
 
-            parsed.transactionDate!,
+            const sourceAccount =
+                parsed.accountLast4
+                    ? await tx.financialAccount.findFirst({
+                        where: {
+                            userId: email.userId,
+                            last4: parsed.accountLast4,
+                            type:
+                                parsed.accountType ??
+                                FinancialAccountType.CREDIT_CARD,
+                            isActive: true,
+                            isArchived: false,
+                            deletedAt: null,
+                        },
+                    })
+                    : null;
 
-        year:
+            const amount = new Prisma.Decimal(
+                parsed.amount,
+            );
 
-            parsed.transactionDate!
+            const transaction =
+                await tx.transaction.create({
+                    data: {
+                        userId: email.userId,
+                        type: parsed.type,
+                        amount,
+                        date,
+                        year: date.getFullYear(),
+                        month: date.getMonth() + 1,
 
-                .getFullYear(),
+                        merchant:
+                            parsed.merchant ?? null,
 
-        month:
+                        merchantNormalized:
+                            parsed.merchant
+                                ? normalizeMerchantName(
+                                    parsed.merchant,
+                                )
+                                : null,
 
-            parsed.transactionDate!
+                        categoryId,
 
-                .getMonth() + 1,
+                        source:
+                        TransactionSource.GMAIL,
 
-        merchant:
+                        sourceAccountId:
+                            sourceAccount?.id ?? null,
 
-        parsed.merchant,
+                        fingerprint,
 
-        paymentMethod:
+                        metadata: {
+                            provider,
+                            parserVersion: 1,
+                            accountLast4:
+                                parsed.accountLast4 ??
+                                null,
+                            accountType:
+                                parsed.accountType ??
+                                FinancialAccountType.CREDIT_CARD,
+                            accountMatched:
+                                Boolean(sourceAccount),
+                        },
+                    },
+                });
 
-        FinancialAccountType.CREDIT_CARD,
+            if (sourceAccount) {
+                await postTransactionToLedger(
+                    tx,
+                    email.userId,
+                    transaction,
+                    amount,
+                );
+            }
 
-        note:
+            await updateAnalytics(
+                tx,
+                email.userId,
+                date.getFullYear(),
+                date.getMonth() + 1,
+                parsed.type,
+                amount,
+                "increment",
+            );
 
-        gmailMessage.subject,
+            return {
+                status: "created" as const,
+                transactionId: transaction.id,
+            };
+        });
+    } catch (error) {
 
-        source:
-
-        TransactionSource.GMAIL,
-
-        gmailMessageId:
-
-        gmailMessage.id,
-
-        // fingerprint,
-
-        metadata: {
-
-            provider: "AXIS",
-
-            parserVersion: 1
-
+        if (
+            error instanceof
+            Prisma.PrismaClientKnownRequestError &&
+            error.code === "P2002"
+        ) {
+            return {
+                status: "duplicate" as const,
+            };
         }
 
+        throw error;
+    }
+};
+
+// This only exists to process and remove email rows created by older versions.
+export const processGmailMessage = async (
+    gmailMessageId: string,
+) => {
+
+    const gmailMessage =
+        await prisma.gmailMessage.findUnique({
+            where: {
+                id: gmailMessageId,
+            },
+            include: {
+                gmailAccount: true,
+            },
+        });
+
+    if (!gmailMessage) {
+        return {
+            status: "skipped" as const,
+        };
+    }
+
+    const result =
+        await ingestGmailEmail({
+            userId:
+            gmailMessage.gmailAccount.userId,
+            gmailMessageId:
+            gmailMessage.gmailMessageId,
+            sender: gmailMessage.sender,
+            subject: gmailMessage.subject,
+            body: gmailMessage.body,
+            receivedAt:
+                gmailMessage.receivedAt ??
+                gmailMessage.createdAt,
+        });
+
+    await prisma.gmailMessage.delete({
+        where: {
+            id: gmailMessage.id,
+        },
     });
 
-    console.log("====================\n");
+    return result;
 };

@@ -22,20 +22,22 @@ model User {
 
   gmailAccount      GmailAccount?
   financialAccounts FinancialAccount[]
+  merchantMappings  MerchantMapping[]
 }
 
 model Category {
-  id           String          @id @default(uuid())
-  userId       String
-  name         String
-  type         TransactionType
-  parentId     String?
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
-  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  parent       Category?       @relation("CategoryTree", fields: [parentId], references: [id])
-  children     Category[]      @relation("CategoryTree")
-  transactions Transaction[]
+  id               String            @id @default(uuid())
+  userId           String
+  name             String
+  type             TransactionType
+  parentId         String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent           Category?         @relation("CategoryTree", fields: [parentId], references: [id])
+  children         Category[]        @relation("CategoryTree")
+  transactions     Transaction[]
+  merchantMappings MerchantMapping[]
 
   @@unique([userId, parentId, name])
   @@index([userId])
@@ -85,6 +87,7 @@ model Transaction {
   @@index([sourceAccountId])
   @@index([destinationAccountId])
   @@index([gmailMessageId])
+  @@index([userId, merchantNormalized])
 }
 
 model LedgerEntry {
@@ -190,6 +193,28 @@ model FinancialAccount {
   @@index([userId])
   @@index([type])
   @@index([last4])
+}
+
+model MerchantMapping {
+  id             String                @id @default(uuid())
+  userId         String
+  user           User                  @relation(fields: [userId], references: [id])
+  normalizedName String
+  displayName    String?
+  categoryId     String
+  category       Category              @relation(fields: [categoryId], references: [id])
+  source         MerchantMappingSource
+  confidence     Float?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  @@unique([userId, normalizedName])
+}
+
+enum MerchantMappingSource {
+  RULE
+  AI
+  USER
 }
 
 enum TransactionStatus {

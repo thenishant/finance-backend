@@ -1,6 +1,8 @@
 import {prisma} from "../../database/prisma";
 import {Prisma, TransactionType} from "@prisma/client";
 import {postTransactionToLedger} from "../ledger/ledger.service";
+import {categorizeMerchant} from "../merchant/merchant.service";
+import { normalizeMerchantName } from "../merchant/merchant.normalizer";
 
 const serialize = (obj: any) =>
     JSON.parse(
@@ -9,7 +11,7 @@ const serialize = (obj: any) =>
         )
     );
 
-const updateAnalytics = async (
+export const updateAnalytics = async (
     tx: Prisma.TransactionClient,
     userId: string,
     year: number,
@@ -50,6 +52,7 @@ export const createTransaction = async (
         type: TransactionType;
         amount: number;
         date: string;
+        merchant?: string;
         categoryId?: string;
         sourceAccountId?: string;
         destinationAccountId?: string;
@@ -325,6 +328,7 @@ export const updateTransaction = async (
         type: TransactionType;
         amount: number;
         date: string;
+        merchant?: string;
         categoryId?: string;
         sourceAccountId?: string;
         destinationAccountId?: string;
@@ -441,31 +445,42 @@ export const updateTransaction = async (
             );
         }
 
-        if (
-            data.type !== TransactionType.TRANSFER &&
-            !data.categoryId
-        ) {
-            throw new Error(
-                "categoryId required"
-            );
-        }
+        let categoryId = data.categoryId;
 
-        if (data.categoryId) {
+        if (
+            data.type !== TransactionType.TRANSFER
+        ) {
+
+            if (!categoryId) {
+
+                if (!data.merchant) {
+                    throw new Error(
+                        "Either categoryId or merchant is required."
+                    );
+                }
+
+                const result =
+                    await categorizeMerchant({
+                        userId,
+                        merchantName: data.merchant,
+                        transactionType: data.type,
+                    });
+
+                categoryId = result.category.id;
+            }
+
             const category =
                 await tx.category.findFirst({
                     where: {
-                        id: data.categoryId,
+                        id: categoryId,
                         userId,
                     },
                 });
 
             if (!category) {
-                throw new Error(
-                    "Invalid categoryId"
-                );
+                throw new Error("Invalid categoryId");
             }
         }
-
         /* =============================
            REMOVE OLD ANALYTICS
         ============================== */
@@ -505,14 +520,11 @@ export const updateTransaction = async (
                     date,
                     year,
                     month,
-                    categoryId:
-                        data.type === TransactionType.TRANSFER
-                            ? null
-                            : data.categoryId,
-                    sourceAccountId:
-                        data.sourceAccountId ?? null,
-                    destinationAccountId:
-                        data.destinationAccountId ?? null,
+                    categoryId: data.type === TransactionType.TRANSFER ? null : categoryId,
+                    merchant: data.merchant ?? null,
+                    merchantNormalized: data.merchant ? normalizeMerchantName(data.merchant) : null,
+                    sourceAccountId: data.sourceAccountId ?? null,
+                    destinationAccountId: data.destinationAccountId ?? null,
                     note: data.note ?? null,
                 },
             });

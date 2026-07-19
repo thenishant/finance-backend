@@ -3,10 +3,9 @@ import {google} from "googleapis";
 import {prisma} from "../../../database/prisma";
 import {verifyGoogleState} from "./gmail.utils";
 import {syncMailbox} from "./gmail.service";
-import {parseEmail} from "./parsers/parser.factory";
-import {detectBankProvider} from "./detector/bank.detector";
 import {processGmailMessage} from "./ingestion/transaction.ingestion";
-import {getParamId, getUserId} from "../../../shared/utils/auth.utils";
+import {getUserId} from "../../../shared/utils/auth.utils";
+import {syncGmailSchema} from "./gmail.dto";
 
 export const googleCallback = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -22,6 +21,15 @@ export const googleCallback = async (req: Request, res: Response, next: NextFunc
         }
 
         const payload = verifyGoogleState(state);
+
+        if (payload.purpose !== "gmail-connect") {
+            return res.status(400).json({
+                success: false,
+                error: {
+                    message: "Invalid Google authorization state"
+                }
+            });
+        }
 
         const oauth2Client = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, process.env.GOOGLE_REDIRECT_URI);
 
@@ -72,6 +80,13 @@ export const googleCallback = async (req: Request, res: Response, next: NextFunc
                 expiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : null
             }
         });
+
+        return res.json({
+            success: true,
+            data: {
+                email
+            }
+        });
     } catch (error) {
         next(error);
     }
@@ -119,7 +134,8 @@ export const syncGmail = async (req: Request, res: Response, next: NextFunction)
             });
         }
 
-        const result = await syncMailbox(userId);
+        const options = syncGmailSchema.parse(req.body ?? {});
+        const result = await syncMailbox(userId, options);
 
         return res.json({
             success: true, data: result
@@ -130,43 +146,6 @@ export const syncGmail = async (req: Request, res: Response, next: NextFunction)
     }
 };
 
-
-export const testParser = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-        const gmailMessageId = getParamId(req.params.gmailMessageId);
-        if (!gmailMessageId || Array.isArray(gmailMessageId)) {
-            return res.status(400).json({
-                success: false,
-                error: {
-                    message: "Invalid gmailMessageId"
-                }
-            });
-        }
-        const gmailMessage = await prisma.gmailMessage.findUnique({
-            where: {
-                id: gmailMessageId
-            }
-        });
-
-        if (!gmailMessage) {
-            return res.status(404).json({
-                success: false, error: {
-                    message: "Message not found"
-                }
-            });
-        }
-
-        const provider = detectBankProvider(gmailMessage.sender);
-        const parsed = parseEmail(provider, gmailMessage.subject, gmailMessage.body);
-        return res.json({
-            success: true, data: {
-                provider, sender: gmailMessage.sender, subject: gmailMessage.subject, parsed
-            }
-        });
-    } catch (error) {
-        next(error);
-    }
-};
 
 export const processExistingEmails = async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -195,6 +174,28 @@ export const processExistingEmails = async (req: Request, res: Response, next: N
         }
         return res.json({
             success: true, count: messages.length
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const purgeStoredEmails = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const userId = getUserId(req);
+        const result = await prisma.gmailMessage.deleteMany({
+            where: {
+                gmailAccount: {
+                    userId
+                }
+            }
+        });
+
+        return res.json({
+            success: true,
+            data: {
+                deleted: result.count
+            }
         });
     } catch (error) {
         next(error);
