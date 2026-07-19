@@ -3,6 +3,7 @@ import {MerchantMappingSource} from "@prisma/client";
 import {prisma} from "../../database/prisma";
 import {categorizeMerchantWithAI} from "./merchant.ai";
 import {getCategoryById, getMerchantCategoryTree,} from "./merchant.category";
+import {upsertMerchantMapping} from "./merchant.mapping.service";
 import {normalizeMerchantName} from "./merchant.normalizer";
 import {CategorizeMerchantInput, MerchantCategorizationResult,} from "./merchant.types";
 
@@ -11,7 +12,6 @@ export const categorizeMerchant = async ({
                                              merchantName,
                                              transactionType,
                                          }: CategorizeMerchantInput): Promise<MerchantCategorizationResult> => {
-
     const normalizedName = normalizeMerchantName(merchantName);
 
     if (!normalizedName) {
@@ -38,8 +38,6 @@ export const categorizeMerchant = async ({
             category: true,
         },
     });
-    
-    console.log("[Merchant] Existing mapping:", existing);
 
     if (
         existing &&
@@ -109,35 +107,19 @@ export const categorizeMerchant = async ({
     );
 
     if (!category) {
-        throw new Error(
-            "AI returned an invalid category.",
-        );
+        throw new Error("AI returned an invalid category.");
     }
 
     /**
-     * 5. Cache mapping
+     * 5. Save merchant mapping
      */
-    await prisma.merchantMapping.upsert({
-        where: {
-            userId_normalizedName: {
-                userId,
-                normalizedName,
-            },
-        },
-        create: {
-            userId,
-            normalizedName,
-            displayName: merchantName,
-            categoryId: category.id,
-            source: MerchantMappingSource.AI,
-            confidence: aiResult.confidence,
-        },
-        update: {
-            displayName: merchantName,
-            categoryId: category.id,
-            source: MerchantMappingSource.AI,
-            confidence: aiResult.confidence,
-        },
+    await upsertMerchantMapping({
+        userId,
+        merchant: merchantName,
+        normalizedName,
+        categoryId: category.id,
+        source: MerchantMappingSource.AI,
+        confidence: aiResult.confidence,
     });
 
     console.info("[Merchant] Mapping saved", {
