@@ -36,9 +36,61 @@ const ALIASES: Record<string, string> = {
     google: "google",
     apple: "apple",
     flipkart: "flipkart",
-    razorpay: "razorpay",
-    paytm: "paytm",
-    phonepe: "phonepe",
+};
+
+const PAYMENT_GATEWAY_PREFIXES = [
+    "RAZORPAY",
+    "RAZ",
+    "RZP",
+    "PAYU",
+    "PAYTM",
+    "BILLDESK",
+    "CCAVENUE",
+    "CCA",
+    "PHONEPE",
+    "CASHFREE",
+    "AMAZON PAY",
+] as const;
+
+const TRANSACTION_PREFIXES = [
+    "UPI",
+    "POS",
+    "ECOM",
+    "NEFT",
+    "IMPS",
+    "CARD",
+    "DEBIT CARD",
+    "CREDIT CARD",
+] as const;
+
+const escapeRegex = (value: string): string =>
+    value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const stripPrefixes = (
+    value: string,
+    prefixes: readonly string[],
+): string => {
+    let result = value.trim();
+
+    let changed = true;
+
+    while (changed) {
+        changed = false;
+
+        for (const prefix of prefixes) {
+            const regex = new RegExp(
+                `^${escapeRegex(prefix)}(?:[\\s*:/-]+)?`,
+                "i",
+            );
+
+            if (regex.test(result)) {
+                result = result.replace(regex, "").trim();
+                changed = true;
+            }
+        }
+    }
+
+    return result;
 };
 
 export function normalizeMerchantName(name?: string | null): string {
@@ -46,7 +98,12 @@ export function normalizeMerchantName(name?: string | null): string {
         return "";
     }
 
-    let normalized = name.toLowerCase().trim();
+    let normalized = name.trim();
+
+    normalized = stripPrefixes(normalized, PAYMENT_GATEWAY_PREFIXES);
+    normalized = stripPrefixes(normalized, TRANSACTION_PREFIXES);
+
+    normalized = normalized.toLowerCase();
 
     // Remove UPI handles
     normalized = normalized.replace(/@[a-z0-9._-]+/g, " ");
@@ -57,14 +114,15 @@ export function normalizeMerchantName(name?: string | null): string {
     // Remove emails
     normalized = normalized.replace(/\S+@\S+\.\S+/g, " ");
 
-    // Remove punctuation
+    // Replace punctuation with spaces
     normalized = normalized.replace(/[^a-z0-9\s]/g, " ");
-
-    // Remove standalone numbers
-    normalized = normalized.replace(/\b\d+\b/g, " ");
 
     // Collapse whitespace
     normalized = normalized.replace(/\s+/g, " ").trim();
+
+    if (!normalized) {
+        return "";
+    }
 
     const words = normalized
         .split(" ")
@@ -72,10 +130,12 @@ export function normalizeMerchantName(name?: string | null): string {
         .filter((word) => !STOP_WORDS.has(word));
 
     for (const word of words) {
-        if (ALIASES[word]) {
-            return ALIASES[word];
+        const alias = ALIASES[word];
+
+        if (alias) {
+            return alias;
         }
     }
 
-    return words.join(" ");
+    return [...new Set(words)].join(" ");
 }
