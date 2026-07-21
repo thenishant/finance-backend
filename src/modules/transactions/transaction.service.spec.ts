@@ -1,6 +1,7 @@
 import {PrismaClient, TransactionType} from "@prisma/client";
 import {createTransaction, deleteTransaction, restoreTransaction, updateTransaction,} from "./transaction.service";
-import {describe, it, expect, beforeEach, afterEach,} from "vitest";
+import {afterEach, beforeEach, describe, expect, it,} from "vitest";
+import {normalizeMerchantName} from "../merchant/merchant.normalizer";
 
 const prisma = new PrismaClient();
 
@@ -68,6 +69,7 @@ describe("transaction.service", () => {
         await prisma.category.deleteMany();
         await prisma.financialAccount.deleteMany();
         await prisma.user.deleteMany();
+        await prisma.merchantMapping.deleteMany();
     });
 
     it("creates expense ledger entry", async () => {
@@ -446,5 +448,375 @@ describe("transaction.service", () => {
         ).rejects.toThrow(
             "Cannot transfer to same account"
         );
+    });
+    it("stores merchant and normalized merchant", async () => {
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 100,
+            date: new Date().toISOString(),
+            merchant: "  Swiggy  ",
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        const saved = await prisma.transaction.findUnique({
+            where: {
+                id: trx.id,
+            },
+        });
+
+        expect(saved?.merchant).toBe("Swiggy");
+        expect(saved?.merchantNormalized).toBe(
+            normalizeMerchantName("Swiggy")
+        );
+    });
+
+    it("preserves merchant when updating category only", async () => {
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 100,
+            date: new Date().toISOString(),
+            merchant: "Swiggy",
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        const newCategory = await prisma.category.create({
+            data: {
+                userId,
+                name: "Dining",
+                type: TransactionType.EXPENSE,
+            },
+        });
+
+        await updateTransaction(userId, trx.id, {
+            type: TransactionType.EXPENSE,
+            amount: 100,
+            date: new Date().toISOString(),
+            categoryId: newCategory.id,
+        });
+
+        const updated = await prisma.transaction.findUnique({
+            where: {
+                id: trx.id,
+            },
+        });
+
+        expect(updated?.merchant).toBe("Swiggy");
+        expect(updated?.merchantNormalized).toBe(
+            normalizeMerchantName("Swiggy")
+        );
+    });
+
+    it("preserves accounts when updating note only", async () => {
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 100,
+            date: new Date().toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        await updateTransaction(userId, trx.id, {
+            type: TransactionType.EXPENSE,
+            amount: 100,
+            date: new Date().toISOString(),
+            categoryId,
+            note: "updated",
+        });
+
+        const updated = await prisma.transaction.findUnique({
+            where: {
+                id: trx.id,
+            },
+        });
+
+        expect(updated?.sourceAccountId).toBe(bank1Id);
+    });
+
+    it("preserves note when omitted during update", async () => {
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 100,
+            date: new Date().toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+            note: "original note",
+        });
+
+        await updateTransaction(userId, trx.id, {
+            type: TransactionType.EXPENSE,
+            amount: 200,
+            date: new Date().toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        const updated = await prisma.transaction.findUnique({
+            where: {
+                id: trx.id,
+            },
+        });
+
+        expect(updated?.note).toBe("original note");
+    });
+
+    it("creates monthly analytics for expense", async () => {
+        const now = new Date();
+
+        await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 1000,
+            date: now.toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        const analytics =
+            await prisma.monthlyAnalytics.findUnique({
+                where: {
+                    userId_year_month: {
+                        userId,
+                        year: now.getFullYear(),
+                        month: now.getMonth() + 1,
+                    },
+                },
+            });
+
+        expect(Number(analytics?.totalExpense)).toBe(1000);
+    });
+
+    it("decrements analytics after delete", async () => {
+        const now = new Date();
+
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 1000,
+            date: now.toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        await deleteTransaction(userId, trx.id);
+
+        const analytics =
+            await prisma.monthlyAnalytics.findUnique({
+                where: {
+                    userId_year_month: {
+                        userId,
+                        year: now.getFullYear(),
+                        month: now.getMonth() + 1,
+                    },
+                },
+            });
+
+        expect(Number(analytics?.totalExpense)).toBe(0);
+    });
+
+    it("increments analytics after restore", async () => {
+        const now = new Date();
+
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 1000,
+            date: now.toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        await deleteTransaction(userId, trx.id);
+        await restoreTransaction(userId, trx.id);
+
+        const analytics =
+            await prisma.monthlyAnalytics.findUnique({
+                where: {
+                    userId_year_month: {
+                        userId,
+                        year: now.getFullYear(),
+                        month: now.getMonth() + 1,
+                    },
+                },
+            });
+
+        expect(Number(analytics?.totalExpense)).toBe(1000);
+    });
+
+    it("updates analytics when amount changes", async () => {
+        const now = new Date();
+
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 1000,
+            date: now.toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        await updateTransaction(userId, trx.id, {
+            type: TransactionType.EXPENSE,
+            amount: 1500,
+            date: now.toISOString(),
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        const analytics =
+            await prisma.monthlyAnalytics.findUnique({
+                where: {
+                    userId_year_month: {
+                        userId,
+                        year: now.getFullYear(),
+                        month: now.getMonth() + 1,
+                    },
+                },
+            });
+
+        expect(Number(analytics?.totalExpense)).toBe(1500);
+    });
+
+    it("rejects invalid category type", async () => {
+        const incomeCategory =
+            await prisma.category.create({
+                data: {
+                    userId,
+                    name: "Salary",
+                    type: TransactionType.INCOME,
+                },
+            });
+
+        await expect(
+            createTransaction(userId, {
+                type: TransactionType.EXPENSE,
+                amount: 100,
+                date: new Date().toISOString(),
+                categoryId: incomeCategory.id,
+                sourceAccountId: bank1Id,
+            })
+        ).rejects.toThrow(
+            "Category type does not match transaction type"
+        );
+    });
+
+    it("rejects invalid source account", async () => {
+        await expect(
+            createTransaction(userId, {
+                type: TransactionType.EXPENSE,
+                amount: 100,
+                date: new Date().toISOString(),
+                categoryId,
+                sourceAccountId: "invalid-id",
+            })
+        ).rejects.toThrow("Invalid source account");
+    });
+
+    it("rejects invalid destination account", async () => {
+        const incomeCategory =
+            await prisma.category.create({
+                data: {
+                    userId,
+                    name: "Salary",
+                    type: TransactionType.INCOME,
+                },
+            });
+
+        await expect(
+            createTransaction(userId, {
+                type: TransactionType.INCOME,
+                amount: 100,
+                date: new Date().toISOString(),
+                categoryId: incomeCategory.id,
+                destinationAccountId: "invalid-id",
+            })
+        ).rejects.toThrow("Invalid destination account");
+    });
+
+    it("rejects invalid date", async () => {
+        await expect(
+            createTransaction(userId, {
+                type: TransactionType.EXPENSE,
+                amount: 100,
+                date: "invalid-date",
+                categoryId,
+                sourceAccountId: bank1Id,
+            })
+        ).rejects.toThrow("Invalid date");
+    });
+
+    it("rejects negative amount", async () => {
+        await expect(
+            createTransaction(userId, {
+                type: TransactionType.EXPENSE,
+                amount: -100,
+                date: new Date().toISOString(),
+                categoryId,
+                sourceAccountId: bank1Id,
+            })
+        ).rejects.toThrow("Amount must be > 0");
+    });
+
+    it("learns merchant mapping when updateMerchantMapping is true", async () => {
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 100,
+            date: new Date().toISOString(),
+            merchant: "Swiggy",
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        await updateTransaction(userId, trx.id, {
+            type: TransactionType.EXPENSE,
+            amount: 100,
+            date: new Date().toISOString(),
+            merchant: "Swiggy",
+            categoryId,
+            sourceAccountId: bank1Id,
+            updateMerchantMapping: true,
+        });
+
+        const mapping =
+            await prisma.merchantMapping.findFirst({
+                where: {
+                    userId,
+                    normalizedName:
+                        normalizeMerchantName("Swiggy"),
+                },
+            });
+
+        expect(mapping).not.toBeNull();
+        expect(mapping?.categoryId).toBe(categoryId);
+        expect(mapping?.confidence).toBe(1);
+        expect(mapping?.source).toBe("USER");
+    });
+
+    it("does not learn merchant mapping by default", async () => {
+        const trx = await createTransaction(userId, {
+            type: TransactionType.EXPENSE,
+            amount: 100,
+            date: new Date().toISOString(),
+            merchant: "Zomato",
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        await updateTransaction(userId, trx.id, {
+            type: TransactionType.EXPENSE,
+            amount: 100,
+            date: new Date().toISOString(),
+            merchant: "Zomato",
+            categoryId,
+            sourceAccountId: bank1Id,
+        });
+
+        const mapping =
+            await prisma.merchantMapping.findFirst({
+                where: {
+                    userId,
+                    normalizedName:
+                        normalizeMerchantName("Zomato"),
+                },
+            });
+
+        expect(mapping).toBeNull();
     });
 });

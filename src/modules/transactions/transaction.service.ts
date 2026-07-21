@@ -2,9 +2,10 @@ import {prisma} from "../../database/prisma";
 import {Prisma, TransactionType} from "@prisma/client";
 import {postTransactionToLedger} from "../ledger/ledger.service";
 import {categorizeMerchant} from "../merchant/merchant.service";
-import { normalizeMerchantName } from "../merchant/merchant.normalizer";
+import {normalizeMerchantName} from "../merchant/merchant.normalizer";
+import {learnMerchantCategory} from "../merchant/merchant.learning.service";
 
-const serialize = (obj: any) =>
+const serialize = <T>(obj: T) =>
     JSON.parse(
         JSON.stringify(obj, (_, v) =>
             v instanceof Prisma.Decimal ? v.toString() : v
@@ -22,7 +23,7 @@ export const updateAnalytics = async (
 ) => {
     if (type === TransactionType.TRANSFER) return;
 
-    const updateData: any = {};
+    const updateData: Prisma.MonthlyAnalyticsUpdateInput = {};
 
     if (type === TransactionType.INCOME) {
         updateData.totalIncome = {[op]: amount};
@@ -138,36 +139,51 @@ export const createTransaction = async (
         }
 
         if (data.categoryId) {
-            const category =
-                await tx.category.findFirst({
-                    where: {
-                        id: data.categoryId,
-                        userId,
-                    },
-                });
+            const category = await tx.category.findFirst({
+                where: {
+                    id: data.categoryId,
+                    userId,
+                },
+            });
 
             if (!category) {
                 throw new Error("Invalid categoryId");
             }
+
+            if (
+                data.type !== TransactionType.TRANSFER &&
+                category.type !== data.type
+            ) {
+                throw new Error(
+                    "Category type does not match transaction type"
+                );
+            }
         }
 
-        const trx =
-            await tx.transaction.create({
-                data: {
-                    userId,
-                    type: data.type,
-                    amount,
-                    date,
-                    year,
-                    month,
-                    categoryId: data.type === TransactionType.TRANSFER ? null : data.categoryId,
-                    sourceAccountId: data.sourceAccountId ?? null,
-                    destinationAccountId: data.destinationAccountId ?? null,
-                    note: data.note ?? null,
-                    idempotencyKey: data.idempotencyKey ?? null,
-                },
-            });
+        const merchant = data.merchant?.trim() || null;
 
+        const trx = await tx.transaction.create({
+            data: {
+                userId,
+                type: data.type,
+                amount,
+                date,
+                year,
+                month,
+                categoryId:
+                    data.type === TransactionType.TRANSFER
+                        ? null
+                        : data.categoryId,
+                merchant,
+                merchantNormalized: merchant
+                    ? normalizeMerchantName(merchant)
+                    : null,
+                sourceAccountId: data.sourceAccountId ?? null,
+                destinationAccountId: data.destinationAccountId ?? null,
+                note: data.note ?? null,
+                idempotencyKey: data.idempotencyKey ?? null,
+            },
+        });
         await postTransactionToLedger(tx, userId, trx, amount);
         await updateAnalytics(tx, userId, year, month, data.type, amount, "increment");
         return serialize(trx);
@@ -332,11 +348,11 @@ export const updateTransaction = async (
         categoryId?: string;
         sourceAccountId?: string;
         destinationAccountId?: string;
+        updateMerchantMapping?: boolean;
         note?: string;
     }
 ) => {
     return prisma.$transaction(async tx => {
-
         const existing = await tx.transaction.findFirst({
             where: {
                 id: transactionId,
@@ -372,7 +388,14 @@ export const updateTransaction = async (
            ACCOUNT VALIDATION
         ============================== */
 
-        const findAccount = (accountId?: string) =>
+        const sourceAccountId =
+            data.sourceAccountId ?? existing.sourceAccountId;
+
+        const destinationAccountId =
+            data.destinationAccountId ??
+            existing.destinationAccountId;
+
+        const findAccount = (accountId?: string | null) =>
             accountId
                 ? tx.financialAccount.findFirst({
                     where: {
@@ -384,19 +407,14 @@ export const updateTransaction = async (
                 })
                 : Promise.resolve(null);
 
-        const fromAccount =
-            await findAccount(data.sourceAccountId);
-
-        const toAccount =
-            await findAccount(data.destinationAccountId);
+        const fromAccount = await findAccount(sourceAccountId);
+        const toAccount = await findAccount(destinationAccountId);
 
         if (
             data.type === TransactionType.INCOME &&
             !toAccount
         ) {
-            throw new Error(
-                "Invalid destination account"
-            );
+            throw new Error("Invalid destination account");
         }
 
         if (
@@ -406,29 +424,16 @@ export const updateTransaction = async (
             ) &&
             !fromAccount
         ) {
-            throw new Error(
-                "Invalid source account"
-            );
+            throw new Error("Invalid source account");
         }
 
-        if (
-            data.type === TransactionType.TRANSFER
-        ) {
-            if (
-                !fromAccount ||
-                !toAccount
-            ) {
-                throw new Error(
-                    "Both accounts are required"
-                );
+        if (data.type === TransactionType.TRANSFER) {
+            if (!fromAccount || !toAccount) {
+                throw new Error("Both accounts are required");
             }
 
-            if (
-                fromAccount.id === toAccount.id
-            ) {
-                throw new Error(
-                    "Cannot transfer to same account"
-                );
+            if (fromAccount.id === toAccount.id) {
+                throw new Error("Cannot transfer to same account");
             }
         }
 
@@ -440,47 +445,47 @@ export const updateTransaction = async (
             data.type === TransactionType.TRANSFER &&
             data.categoryId
         ) {
-            throw new Error(
-                "Transfers cannot have categories"
-            );
+            throw new Error("Transfers cannot have categories");
         }
 
-        let categoryId = data.categoryId;
+        let categoryId =
+            data.categoryId ?? existing.categoryId;
 
-        if (
-            data.type !== TransactionType.TRANSFER
-        ) {
-
+        if (data.type !== TransactionType.TRANSFER) {
             if (!categoryId) {
-
                 if (!data.merchant) {
                     throw new Error(
                         "Either categoryId or merchant is required."
                     );
                 }
 
-                const result =
-                    await categorizeMerchant({
-                        userId,
-                        merchantName: data.merchant,
-                        transactionType: data.type,
-                    });
+                const result = await categorizeMerchant({
+                    userId,
+                    merchantName: data.merchant,
+                    transactionType: data.type,
+                });
 
                 categoryId = result.category.id;
             }
 
-            const category =
-                await tx.category.findFirst({
-                    where: {
-                        id: categoryId,
-                        userId,
-                    },
-                });
+            const category = await tx.category.findFirst({
+                where: {
+                    id: categoryId,
+                    userId,
+                },
+            });
 
             if (!category) {
                 throw new Error("Invalid categoryId");
             }
+
+            if (category.type !== data.type) {
+                throw new Error(
+                    "Category type does not match transaction type"
+                );
+            }
         }
+
         /* =============================
            REMOVE OLD ANALYTICS
         ============================== */
@@ -496,7 +501,7 @@ export const updateTransaction = async (
         );
 
         /* =============================
-           REMOVE OLD LEDGER ENTRIES
+           REMOVE OLD LEDGER
         ============================== */
 
         await tx.ledgerEntry.deleteMany({
@@ -506,28 +511,59 @@ export const updateTransaction = async (
         });
 
         /* =============================
+           PREPARE MERCHANT
+        ============================== */
+
+        const merchant =
+            data.merchant !== undefined
+                ? data.merchant.trim() || null
+                : existing.merchant;
+
+        const merchantNormalized = merchant
+            ? normalizeMerchantName(merchant)
+            : null;
+
+        /* =============================
            UPDATE TRANSACTION
         ============================== */
 
-        const updated =
-            await tx.transaction.update({
-                where: {
-                    id: existing.id,
-                },
-                data: {
-                    type: data.type,
-                    amount,
-                    date,
-                    year,
-                    month,
-                    categoryId: data.type === TransactionType.TRANSFER ? null : categoryId,
-                    merchant: data.merchant ?? null,
-                    merchantNormalized: data.merchant ? normalizeMerchantName(data.merchant) : null,
-                    sourceAccountId: data.sourceAccountId ?? null,
-                    destinationAccountId: data.destinationAccountId ?? null,
-                    note: data.note ?? null,
-                },
+        const updated = await tx.transaction.update({
+            where: {
+                id: existing.id,
+            },
+            data: {
+                type: data.type,
+                amount,
+                date,
+                year,
+                month,
+                categoryId:
+                    data.type === TransactionType.TRANSFER
+                        ? null
+                        : categoryId,
+                merchant,
+                merchantNormalized,
+                sourceAccountId,
+                destinationAccountId,
+                note: data.note ?? existing.note,
+            },
+        });
+
+        /* =============================
+           LEARN MERCHANT
+        ============================== */
+
+        if (
+            data.updateMerchantMapping &&
+            updated.merchant &&
+            updated.categoryId
+        ) {
+            await learnMerchantCategory(tx, {
+                userId,
+                merchant: updated.merchant,
+                categoryId: updated.categoryId,
             });
+        }
 
         /* =============================
            REBUILD LEDGER
@@ -541,7 +577,7 @@ export const updateTransaction = async (
         );
 
         /* =============================
-           APPLY NEW ANALYTICS
+           APPLY ANALYTICS
         ============================== */
 
         await updateAnalytics(
