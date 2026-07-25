@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
+import swaggerUi from "swagger-ui-express";
 import authRoutes from './modules/auth/auth.routes';
 import errorHandler from './shared/middleware/errorHandler';
 import transactionRoutes from "./modules/transactions/transaction.routes";
@@ -10,6 +11,7 @@ import analyticsRoutes from "./modules/analytics/analytics.routes";
 import investmentRoutes from "./modules/investments/investment.routes";
 import gmailRoutes from "./modules/email/gmail/gmail.routes";
 import financialAccountRoutes from "./modules/financial-account/financial-account.routes";
+import {specs} from "./docs/swagger";
 
 dotenv.config();
 
@@ -30,6 +32,8 @@ app.use("/analytics", analyticsRoutes);
 app.use("/investment", investmentRoutes);
 app.use("/api/gmail", gmailRoutes);
 app.use("/financial-accounts", financialAccountRoutes);
+
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(specs));
 app.use(errorHandler);
 
 export default app;
