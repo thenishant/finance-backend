@@ -22,8 +22,6 @@ export interface GmailEmailForIngestion {
 export const ingestGmailEmail = async (
     email: GmailEmailForIngestion,
 ) => {
-    console.log("[GMAIL] ingestGmailEmail called");
-
     const provider = detectBankProvider(email.sender);
 
     if (provider === BankProvider.UNKNOWN) {
@@ -38,8 +36,6 @@ export const ingestGmailEmail = async (
         email.body,
     );
 
-    console.log("[GMAIL] Parsed:", parsed);
-
     if (!parsed) {
         return {
             status: "not-a-transaction" as const,
@@ -52,7 +48,6 @@ export const ingestGmailEmail = async (
         parsed.merchant &&
         parsed.type !== TransactionType.TRANSFER
     ) {
-        console.log("[GMAIL] Calling categorizeMerchant");
         try {
             const categorization = await categorizeMerchant({
                 userId: email.userId,

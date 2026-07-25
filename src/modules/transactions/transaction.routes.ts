@@ -7,6 +7,7 @@ const router = Router();
 router.use(authenticate);
 
 router.get("/", authenticate, transactionController.getAllTransactions);
+router.get("/recent", authenticate, transactionController.getRecentTransactions);
 router.post("/", authenticate, transactionController.create);
 router.get("/:id", authenticate, transactionController.getTransactionById);
 router.delete("/:id", authenticate, transactionController.remove);

@@ -1,5 +1,6 @@
 import {NextFunction, Request, Response} from "express";
 import {
+    getDashboard,
     getMonthlyAnalytics,
     getMonthlyComparison,
     getTopSpendingCategories,
@@ -96,6 +97,25 @@ export const monthCompare = async (
         return res.json({
             success: true,
             data
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const dashboard = async (
+    req: Request,
+    res: Response,
+    next: NextFunction
+) => {
+    try {
+        const data = await getDashboard(
+            getUserId(req)
+        );
+
+        return res.json({
+            success: true,
+            data,
         });
     } catch (error) {
         next(error);

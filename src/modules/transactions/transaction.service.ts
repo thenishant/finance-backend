@@ -297,6 +297,27 @@ export const restoreTransaction = async (
     });
 };
 
+export const getRecentTransactions = async (
+    userId: string,
+    limit = 5
+) => {
+    return prisma.transaction.findMany({
+        where: {
+            userId,
+            deletedAt: null,
+        },
+        include: {
+            category: true,
+            sourceAccount: true,
+            destinationAccount: true,
+        },
+        orderBy: {
+            date: "desc",
+        },
+        take: limit,
+    });
+};
+
 export const getTransactions = async (
     userId: string
 ) => {
@@ -553,10 +574,17 @@ export const updateTransaction = async (
            LEARN MERCHANT
         ============================== */
 
+        const categoryChanged =
+            updated.categoryId !== existing.categoryId;
+
+        const merchantChanged =
+            updated.merchantNormalized !== existing.merchantNormalized;
+
         if (
             data.updateMerchantMapping &&
             updated.merchant &&
-            updated.categoryId
+            updated.categoryId &&
+            (categoryChanged || merchantChanged)
         ) {
             await learnMerchantCategory(tx, {
                 userId,

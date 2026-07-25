@@ -1,5 +1,7 @@
 import {prisma} from "../../database/prisma";
 import {TransactionType} from "@prisma/client";
+import {getRecentTransactions} from "../transactions/transaction.service";
+import {getFinancialAccounts} from "../financial-account/financial-account.service";
 
 /* ======================================================
    TYPES
@@ -477,5 +479,56 @@ export const getMonthlyComparison = async (
             investment: calculateChange(currInvestment, prevInvestment),
             savings: calculateChange(currSavings, prevSavings)
         }
+    };
+};
+
+export const getDashboard = async (userId: string) => {
+    const now = new Date();
+
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+
+    const [accounts, monthly, comparison, topCategories, recentTransactions,
+    ] = await Promise.all([
+        getFinancialAccounts(userId),
+        getMonthlyAnalytics(userId, year, month),
+        getMonthlyComparison(userId, year, month),
+        getTopSpendingCategories(userId, year, month),
+        getRecentTransactions(userId, 5),
+    ]);
+
+    const accountSummary = accounts.map(account => ({
+        id: account.id,
+        name: account.name,
+        type: account.type,
+        balance: account.balance,
+    }));
+
+    const totalBalance = accountSummary.reduce(
+        (sum, account) => sum + Number(account.balance),
+        0
+    );
+
+    const recent = recentTransactions.map(transaction => ({
+        id: transaction.id,
+        amount: transaction.amount.toString(),
+        type: transaction.type,
+        merchant: transaction.merchant,
+        date: transaction.date,
+        category: transaction.category?.name ?? null,
+    }));
+
+    return {
+        summary: {
+            totalBalance,
+            monthlyIncome: monthly.totalIncome,
+            monthlyExpense: monthly.totalExpense,
+            monthlyInvestment: monthly.totalInvestment,
+            monthlySavings: monthly.netSavings,
+        },
+        comparison,
+        accounts: accountSummary,
+        topCategories,
+        recentTransactions: recent,
     };
 };

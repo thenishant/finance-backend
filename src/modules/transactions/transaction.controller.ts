@@ -35,6 +35,19 @@ export const restore = async (req: Request, res: Response, next: NextFunction) =
         next(error);
     }
 };
+
+export const getRecentTransactions = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const transactions = await transactionService.getRecentTransactions(getUserId(req));
+
+        return res.json({
+            success: true, data: transactions,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 export const getAllTransactions = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const transactions = await transactionService.getTransactions(getUserId(req));
