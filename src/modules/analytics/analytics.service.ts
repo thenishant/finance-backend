@@ -505,7 +505,8 @@ export const getDashboard = async (
         id: account.id,
         name: account.name,
         type: account.type,
-        balance: account.balance,
+        balance: Number(account.balance),
+        last4: account.last4,
     }));
 
     const totalBalance = accountSummary.reduce(
