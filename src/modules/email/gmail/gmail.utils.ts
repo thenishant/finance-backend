@@ -25,13 +25,13 @@ export const verifyGoogleState = (state: string) => {
     };
 };
 
-export const createGoogleClient = () =>
-    new google.auth.OAuth2(
+export const createGoogleClient = () => {
+    return new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID!,
         process.env.GOOGLE_CLIENT_SECRET!,
         process.env.GOOGLE_REDIRECT_URI!
     );
-
+};
 
 export const createGmailClient = (refreshToken: string) => {
     const client = createGoogleClient();

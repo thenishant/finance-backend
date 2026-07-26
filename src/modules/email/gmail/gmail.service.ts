@@ -241,14 +241,14 @@ export const syncMailbox = async (
 
 export const getGoogleUrl = async (userId: string) => {
     const state = generateGoogleState(userId);
-    const url = createGoogleClient().generateAuthUrl({
+    const client = createGoogleClient();
+    const url = client.generateAuthUrl({
         access_type: "offline",
         prompt: "consent",
         state,
-        scope: GOOGLE_SCOPES
+        scope: GOOGLE_SCOPES,
     });
-
-    return {url};
+    return { url };
 };
 
 export const getStatus = async (userId: string) => {
