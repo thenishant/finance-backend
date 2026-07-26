@@ -95,9 +95,7 @@ export const connectGoogleAccount = async ({
 
     const {tokens} = await oauth2Client.getToken(code);
 
-    if (!tokens.refresh_token) {
-        throw new Error("Google did not return refresh token");
-    }
+    console.log("Google tokens:", tokens);
 
     oauth2Client.setCredentials(tokens);
 
@@ -116,10 +114,29 @@ export const connectGoogleAccount = async ({
         throw new Error("Unable to retrieve Gmail email");
     }
 
-    const account = gmailAccountData(
+    const existingAccount = await prisma.gmailAccount.findUnique({
+        where: {
+            userId: payload.userId,
+        },
+    });
+
+    const refreshToken =
+        tokens.refresh_token ?? existingAccount?.refreshToken;
+
+    if (!refreshToken) {
+        throw new Error(
+            "Google did not return a refresh token. Remove the app from your Google Account permissions and connect again."
+        );
+    }
+
+    const account = {
         email,
-        tokens
-    );
+        refreshToken,
+        accessToken: tokens.access_token ?? existingAccount?.accessToken ?? null,
+        expiresAt: tokens.expiry_date
+            ? new Date(tokens.expiry_date)
+            : existingAccount?.expiresAt ?? null,
+    };
 
     await prisma.gmailAccount.upsert({
         where: {
@@ -248,7 +265,7 @@ export const getGoogleUrl = async (userId: string) => {
         state,
         scope: GOOGLE_SCOPES,
     });
-    return { url };
+    return {url};
 };
 
 export const getStatus = async (userId: string) => {

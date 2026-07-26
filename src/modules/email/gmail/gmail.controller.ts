@@ -34,7 +34,9 @@ export const googleCallback = async (
         return res.redirect(
             "finance-mobile://gmail?connected=true"
         );
-    } catch {
+    } catch (error) {
+        console.error("GOOGLE CALLBACK ERROR:", error);
+
         return res.redirect(
             "finance-mobile://gmail?connected=false"
         );
