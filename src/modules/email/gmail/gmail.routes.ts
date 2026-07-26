@@ -1,7 +1,13 @@
 import {Router} from "express";
-import {getGmailStatus, googleCallback, processExistingEmails, purgeStoredEmails, syncGmail} from "./gmail.controller";
+import {
+    getGmailStatus,
+    getGoogleUrl,
+    googleCallback,
+    processExistingEmails,
+    purgeStoredEmails,
+    syncGmail
+} from "./gmail.controller";
 import {authenticate} from "../../../shared/middleware/auth.middleware";
-import {getGoogleUrl} from "../../auth/auth.controller";
 
 const router = Router();
 router.get("/google/url", authenticate, getGoogleUrl);

@@ -71,28 +71,3 @@ export const googleLogin = async (req: Request, res: Response, next: NextFunctio
         next(error);
     }
 };
-
-export const getGoogleUrl = async (req: Request, res: Response) => {
-    const userId = req.user?.userId;
-    if (!userId) {
-        return res.status(401).json({
-            success: false, error: {
-                message: "Unauthorized"
-            }
-        });
-    }
-
-    const state = generateGoogleState(userId);
-
-    const oauth2Client = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, process.env.GOOGLE_REDIRECT_URI);
-
-    const url = oauth2Client.generateAuthUrl({
-        access_type: "offline", prompt: "consent", state,
-
-        scope: ["openid", "email", "profile", "https://www.googleapis.com/auth/gmail.readonly"]
-    });
-
-    return res.json({
-        success: true, data: {url}
-    });
-};

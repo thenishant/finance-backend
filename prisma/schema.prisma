@@ -145,6 +145,7 @@ model GmailAccount {
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   messages     GmailMessage[]
+  historyId    String?
 }
 
 model GmailMessage {
