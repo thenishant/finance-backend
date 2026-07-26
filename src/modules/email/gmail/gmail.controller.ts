@@ -26,17 +26,18 @@ export const googleCallback = async (
     next: NextFunction
 ) => {
     try {
-        const result = await gmailService.connectGoogleAccount({
+        await gmailService.connectGoogleAccount({
             code: req.query.code as string,
             state: req.query.state as string,
         });
 
-        return res.json({
-            success: true,
-            data: result,
-        });
-    } catch (error) {
-        next(error);
+        return res.redirect(
+            "finance-mobile://gmail?connected=true"
+        );
+    } catch {
+        return res.redirect(
+            "finance-mobile://gmail?connected=false"
+        );
     }
 };
 
