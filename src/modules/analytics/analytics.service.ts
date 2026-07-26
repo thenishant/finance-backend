@@ -482,13 +482,17 @@ export const getMonthlyComparison = async (
     };
 };
 
-export const getDashboard = async (userId: string) => {
-    const now = new Date();
-
-    const year = now.getFullYear();
-    const month = now.getMonth() + 1;
-
-    const [accounts, monthly, comparison, topCategories, recentTransactions,
+export const getDashboard = async (
+    userId: string,
+    year: number,
+    month: number
+) => {
+    const [
+        accounts,
+        monthly,
+        comparison,
+        topCategories,
+        recentTransactions,
     ] = await Promise.all([
         getFinancialAccounts(userId),
         getMonthlyAnalytics(userId, year, month),

@@ -109,8 +109,15 @@ export const dashboard = async (
     next: NextFunction
 ) => {
     try {
+        const now = new Date();
+
+        const year = Number(req.query.year) || now.getFullYear();
+        const month = Number(req.query.month) || now.getMonth() + 1;
+
         const data = await getDashboard(
-            getUserId(req)
+            getUserId(req),
+            year,
+            month
         );
 
         return res.json({
