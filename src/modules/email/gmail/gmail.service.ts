@@ -278,6 +278,7 @@ export const getStatus = async (userId: string) => {
     return {
         connected: !!account,
         email: account?.email ?? null,
+        lastSyncAt: account?.lastSyncAt ?? null,
     };
 };
 
