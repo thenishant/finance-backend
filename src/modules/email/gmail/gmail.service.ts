@@ -236,12 +236,14 @@ export const syncMailbox = async (
         result => result.status === "duplicate"
     ).length;
 
+    const lastSyncAt = new Date();
+
     await prisma.gmailAccount.update({
         where: {
             id: gmailAccount.id,
         },
         data: {
-            lastSyncAt: new Date(),
+            lastSyncAt,
         },
     });
 
@@ -252,9 +254,9 @@ export const syncMailbox = async (
         query: GMAIL_QUERY,
         maxResults: options.maxResults ?? 1,
         nextPageToken: listResponse.data.nextPageToken ?? null,
+        lastSyncAt,
     };
-};
-
+}
 
 export const getGoogleUrl = async (userId: string) => {
     const state = generateGoogleState(userId);
