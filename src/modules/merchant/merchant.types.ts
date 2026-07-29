@@ -1,4 +1,4 @@
-import {Category, MerchantMappingSource, TransactionType,} from "@prisma/client";
+import {Category, CategoryAssignmentSource, MerchantMappingSource, TransactionType,} from "@prisma/client";
 
 export interface MerchantCategoryTreeNode {
     id: string;
@@ -18,6 +18,7 @@ export interface MerchantCategorizationResult {
     confidence: number;
     reasoning: string;
     fromCache: boolean;
+    categoryAssignmentSource: CategoryAssignmentSource;
 }
 
 export interface CategorizeMerchantInput {
@@ -33,4 +34,11 @@ export interface UpsertMerchantMappingInput {
     categoryId: string;
     source: MerchantMappingSource;
     confidence?: number | null;
+}
+
+export interface MerchantCategoryOption {
+    id: string;
+    name: string;
+    path: string;
+    type: TransactionType;
 }

@@ -1,8 +1,8 @@
-import {MerchantMappingSource} from "@prisma/client";
+import {CategoryAssignmentSource, MerchantMappingSource} from "@prisma/client";
 
 import {prisma} from "../../database/prisma";
 import {categorizeMerchantWithAI} from "./merchant.ai";
-import {getCategoryById, getMerchantCategoryTree,} from "./merchant.category";
+import {getCategoryById, getMerchantCategoryOptions} from "./merchant.category";
 import {upsertMerchantMapping} from "./merchant.mapping.service";
 import {normalizeMerchantName} from "./merchant.normalizer";
 import {CategorizeMerchantInput, MerchantCategorizationResult,} from "./merchant.types";
@@ -55,6 +55,8 @@ export const categorizeMerchant = async ({
             confidence: existing.confidence ?? 1,
             reasoning: "Merchant previously categorized.",
             fromCache: true,
+            categoryAssignmentSource:
+            CategoryAssignmentSource.AI_EXISTING,
         };
     }
 
@@ -66,20 +68,19 @@ export const categorizeMerchant = async ({
     /**
      * 2. Load category tree
      */
-    const categoryTree = await getMerchantCategoryTree(
-        userId,
-        transactionType,
-    );
+    const categoryOptions = await getMerchantCategoryOptions(userId, transactionType,);
 
-    if (categoryTree.length === 0) {
+
+    if (categoryOptions.length === 0) {
         throw new Error(
             `No ${transactionType} categories found.`,
         );
     }
 
+    console.log("categoryOptions: ", categoryOptions);
     console.info("[Merchant] Calling AI", {
         merchant: merchantName,
-        categoryCount: categoryTree.length,
+        categoryCount: categoryOptions.length,
     });
 
     /**
@@ -88,7 +89,7 @@ export const categorizeMerchant = async ({
     const aiResult = await categorizeMerchantWithAI(
         merchantName,
         transactionType,
-        categoryTree,
+        categoryOptions,
     );
 
     console.info("[Merchant] AI response", {
@@ -137,5 +138,7 @@ export const categorizeMerchant = async ({
         confidence: aiResult.confidence,
         reasoning: aiResult.reasoning,
         fromCache: false,
+        categoryAssignmentSource:
+        CategoryAssignmentSource.AI_EXISTING,
     };
 };

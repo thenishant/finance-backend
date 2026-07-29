@@ -1,6 +1,12 @@
 import {createHash} from "node:crypto";
 
-import {FinancialAccountType, Prisma, TransactionSource, TransactionType,} from "@prisma/client";
+import {
+    CategoryAssignmentSource,
+    FinancialAccountType,
+    Prisma,
+    TransactionSource,
+    TransactionType,
+} from "@prisma/client";
 
 import {prisma} from "../../../../database/prisma";
 import {postTransactionToLedger} from "../../../ledger/ledger.service";
@@ -19,10 +25,12 @@ export interface GmailEmailForIngestion {
     receivedAt?: Date | null;
 }
 
-export const ingestGmailEmail = async (
-    email: GmailEmailForIngestion,
+export const ingestGmailEmail = async (email: GmailEmailForIngestion,
 ) => {
     const provider = detectBankProvider(email.sender);
+
+    let categoryId: string | null = null;
+    let categoryAssignmentSource: CategoryAssignmentSource = CategoryAssignmentSource.USER;
 
     if (provider === BankProvider.UNKNOWN) {
         return {
@@ -42,8 +50,6 @@ export const ingestGmailEmail = async (
         };
     }
 
-    let categoryId: string | null = null;
-
     if (
         parsed.merchant &&
         parsed.type !== TransactionType.TRANSFER
@@ -56,18 +62,10 @@ export const ingestGmailEmail = async (
             });
 
             categoryId = categorization.category.id;
-
-            console.info("Merchant categorized", {
-                merchant: parsed.merchant,
-                normalizedMerchant: normalizeMerchantName(parsed.merchant),
-                categoryId,
-                category: categorization.category.name,
-                provider,
-            });
+            categoryAssignmentSource = categorization.categoryAssignmentSource;
         } catch (error) {
             console.error(
-                "Merchant categorization failed",
-                {
+                "Merchant categorization failed", {
                     merchant: parsed.merchant,
                     provider,
                 },
@@ -81,9 +79,7 @@ export const ingestGmailEmail = async (
         new Date();
 
     const fingerprint = createHash("sha256")
-        .update(
-            `gmail:${email.userId}:${email.gmailMessageId}`,
-        )
+        .update(`gmail:${email.userId}:${email.gmailMessageId}`,)
         .digest("hex");
 
     try {
@@ -144,6 +140,7 @@ export const ingestGmailEmail = async (
                                 : null,
 
                         categoryId,
+                        categoryAssignmentSource,
 
                         source:
                         TransactionSource.GMAIL,
@@ -157,8 +154,7 @@ export const ingestGmailEmail = async (
                             provider,
                             parserVersion: 1,
                             accountLast4:
-                                parsed.accountLast4 ??
-                                null,
+                                parsed.accountLast4 ?? null,
                             accountType:
                                 parsed.accountType ??
                                 FinancialAccountType.CREDIT_CARD,

@@ -1,15 +1,21 @@
 import {Category, TransactionType} from "@prisma/client";
 
 import {prisma} from "../../database/prisma";
-import {MerchantCategoryTreeNode} from "./merchant.types";
+import {MerchantCategoryOption} from "./merchant.types";
 
 /**
- * Returns all categories for the given transaction type as a parent → child tree.
+ * Returns every leaf category together with its full hierarchy.
+ *
+ * Example:
+ *
+ * Transport > Fuel
+ * Transport > Fastag
+ * Food > Restaurants
  */
-export const getMerchantCategoryTree = async (
+export const getMerchantCategoryOptions = async (
     userId: string,
     transactionType: TransactionType,
-): Promise<MerchantCategoryTreeNode[]> => {
+): Promise<MerchantCategoryOption[]> => {
 
     const categories = await prisma.category.findMany({
         where: {
@@ -21,31 +27,45 @@ export const getMerchantCategoryTree = async (
         },
     });
 
-    const childrenByParent = new Map<string, Category[]>();
+    const byId = new Map<string, Category>();
 
     for (const category of categories) {
-        if (!category.parentId) {
-            continue;
-        }
-
-        const children = childrenByParent.get(category.parentId) ?? [];
-        children.push(category);
-        childrenByParent.set(category.parentId, children);
+        byId.set(category.id, category);
     }
 
-    const buildTree = (parent: Category): MerchantCategoryTreeNode => ({
-        id: parent.id,
-        name: parent.name,
-        type: parent.type,
-        children: (childrenByParent.get(parent.id) ?? [])
-            .sort((a, b) => a.name.localeCompare(b.name))
-            .map(buildTree),
-    });
+    const hasChildren = new Set<string>();
+
+    for (const category of categories) {
+        if (category.parentId) {
+            hasChildren.add(category.parentId);
+        }
+    }
+
+    const buildPath = (category: Category): string => {
+        const parts: string[] = [];
+
+        let current: Category | undefined = category;
+
+        while (current) {
+            parts.unshift(current.name);
+
+            current = current.parentId
+                ? byId.get(current.parentId)
+                : undefined;
+        }
+
+        return parts.join(" > ");
+    };
 
     return categories
-        .filter(category => !category.parentId)
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map(buildTree);
+        .filter(category => !hasChildren.has(category.id))
+        .sort((a, b) => buildPath(a).localeCompare(buildPath(b)))
+        .map(category => ({
+            id: category.id,
+            name: category.name,
+            path: buildPath(category),
+            type: category.type,
+        }));
 };
 
 /**

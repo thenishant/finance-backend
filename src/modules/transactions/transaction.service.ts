@@ -1,5 +1,5 @@
 import {prisma} from "../../database/prisma";
-import {Prisma, TransactionType} from "@prisma/client";
+import {CategoryAssignmentSource, Prisma, TransactionType} from "@prisma/client";
 import {postTransactionToLedger} from "../ledger/ledger.service";
 import {categorizeMerchant} from "../merchant/merchant.service";
 import {normalizeMerchantName} from "../merchant/merchant.normalizer";
@@ -170,14 +170,10 @@ export const createTransaction = async (
                 date,
                 year,
                 month,
-                categoryId:
-                    data.type === TransactionType.TRANSFER
-                        ? null
-                        : data.categoryId,
+                categoryId: data.type === TransactionType.TRANSFER ? null : data.categoryId,
+                categoryAssignmentSource: CategoryAssignmentSource.USER,
                 merchant,
-                merchantNormalized: merchant
-                    ? normalizeMerchantName(merchant)
-                    : null,
+                merchantNormalized: merchant ? normalizeMerchantName(merchant) : null,
                 sourceAccountId: data.sourceAccountId ?? null,
                 destinationAccountId: data.destinationAccountId ?? null,
                 note: data.note ?? null,
@@ -431,10 +427,7 @@ export const updateTransaction = async (
         const fromAccount = await findAccount(sourceAccountId);
         const toAccount = await findAccount(destinationAccountId);
 
-        if (
-            data.type === TransactionType.INCOME &&
-            !toAccount
-        ) {
+        if (data.type === TransactionType.INCOME && !toAccount) {
             throw new Error("Invalid destination account");
         }
 
@@ -459,8 +452,8 @@ export const updateTransaction = async (
         }
 
         /* =============================
-           CATEGORY VALIDATION
-        ============================== */
+   CATEGORY VALIDATION
+============================= */
 
         if (
             data.type === TransactionType.TRANSFER &&
@@ -472,7 +465,16 @@ export const updateTransaction = async (
         let categoryId =
             data.categoryId ?? existing.categoryId;
 
+        let categoryAssignmentSource =
+            existing.categoryAssignmentSource;
+
         if (data.type !== TransactionType.TRANSFER) {
+
+            if (data.categoryId) {
+                categoryAssignmentSource =
+                    CategoryAssignmentSource.USER;
+            }
+
             if (!categoryId) {
                 if (!data.merchant) {
                     throw new Error(
@@ -487,6 +489,7 @@ export const updateTransaction = async (
                 });
 
                 categoryId = result.category.id;
+                categoryAssignmentSource = result.categoryAssignmentSource;
             }
 
             const category = await tx.category.findFirst({
@@ -558,18 +561,28 @@ export const updateTransaction = async (
                 date,
                 year,
                 month,
+
                 categoryId:
                     data.type === TransactionType.TRANSFER
                         ? null
                         : categoryId,
+
+                categoryAssignmentSource:
+                    data.type === TransactionType.TRANSFER
+                        ? CategoryAssignmentSource.USER
+                        : categoryAssignmentSource,
+
                 merchant,
+
                 merchantNormalized,
+
                 sourceAccountId,
+
                 destinationAccountId,
+
                 note: data.note ?? existing.note,
             },
         });
-
         /* =============================
            LEARN MERCHANT
         ============================== */
