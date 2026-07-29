@@ -6,12 +6,12 @@ import {normalizeMerchantName} from "../merchant/merchant.normalizer";
 import {learnMerchantCategory} from "../merchant/merchant.learning.service";
 import {needsCategoryReview} from "../merchant/merchant.review";
 
-const serialize = <T>(obj: T) =>
+const serialize = <T>(obj: T): T =>
     JSON.parse(
         JSON.stringify(obj, (_, v) =>
             v instanceof Prisma.Decimal ? v.toString() : v
         )
-    );
+    ) as T;
 const mapTransaction = <
     T extends {
         categoryAssignmentSource: CategoryAssignmentSource;
