@@ -4,6 +4,7 @@ import {postTransactionToLedger} from "../ledger/ledger.service";
 import {categorizeMerchant} from "../merchant/merchant.service";
 import {normalizeMerchantName} from "../merchant/merchant.normalizer";
 import {learnMerchantCategory} from "../merchant/merchant.learning.service";
+import {needsCategoryReview} from "../merchant/merchant.review";
 
 const serialize = <T>(obj: T) =>
     JSON.parse(
@@ -11,6 +12,30 @@ const serialize = <T>(obj: T) =>
             v instanceof Prisma.Decimal ? v.toString() : v
         )
     );
+const mapTransaction = <
+    T extends {
+        categoryAssignmentSource: CategoryAssignmentSource;
+        aiCategoryConfidence: number | null;
+        category?: {
+            name: string;
+        } | null;
+    }
+>(
+    trx: T,
+) => ({
+    ...trx,
+    needsCategoryReview: needsCategoryReview({
+        assignmentSource: trx.categoryAssignmentSource,
+        confidence: trx.aiCategoryConfidence,
+        categoryName: trx.category?.name,
+    }),
+});
+
+const transactionInclude = {
+    category: true,
+    sourceAccount: true,
+    destinationAccount: true,
+} satisfies Prisma.TransactionInclude;
 
 export const updateAnalytics = async (
     tx: Prisma.TransactionClient,
@@ -92,7 +117,20 @@ export const createTransaction = async (
                 );
 
             if (existing) {
-                return serialize(existing);
+                const transaction = await tx.transaction.findUnique({
+                    where: {
+                        id: existing.id,
+                    },
+                    include: transactionInclude,
+                });
+
+                if (!transaction) {
+                    throw new Error("Transaction not found");
+                }
+
+                return serialize(
+                    mapTransaction(transaction)
+                );
             }
         }
 
@@ -172,6 +210,7 @@ export const createTransaction = async (
                 month,
                 categoryId: data.type === TransactionType.TRANSFER ? null : data.categoryId,
                 categoryAssignmentSource: CategoryAssignmentSource.USER,
+                aiCategoryConfidence: null,
                 merchant,
                 merchantNormalized: merchant ? normalizeMerchantName(merchant) : null,
                 sourceAccountId: data.sourceAccountId ?? null,
@@ -179,10 +218,13 @@ export const createTransaction = async (
                 note: data.note ?? null,
                 idempotencyKey: data.idempotencyKey ?? null,
             },
+            include: transactionInclude,
         });
         await postTransactionToLedger(tx, userId, trx, amount);
         await updateAnalytics(tx, userId, year, month, data.type, amount, "increment");
-        return serialize(trx);
+        return serialize(
+            mapTransaction(trx)
+        );
     });
 };
 
@@ -224,17 +266,19 @@ export const deleteTransaction = async (
             "decrement"
         );
 
-        const deleted =
-            await tx.transaction.update({
-                where: {
-                    id: trx.id,
-                },
-                data: {
-                    deletedAt: new Date(),
-                },
-            });
+        const deleted = await tx.transaction.update({
+            where: {
+                id: trx.id,
+            },
+            data: {
+                deletedAt: new Date(),
+            },
+            include: transactionInclude,
+        });
 
-        return serialize(deleted);
+        return serialize(
+            mapTransaction(deleted)
+        );
     });
 };
 
@@ -262,15 +306,15 @@ export const restoreTransaction = async (
             );
         }
 
-        const restored =
-            await tx.transaction.update({
-                where: {
-                    id: trx.id,
-                },
-                data: {
-                    deletedAt: null,
-                },
-            });
+        const restored = await tx.transaction.update({
+            where: {
+                id: trx.id,
+            },
+            data: {
+                deletedAt: null,
+            },
+            include: transactionInclude,
+        });
 
         await postTransactionToLedger(
             tx,
@@ -289,7 +333,9 @@ export const restoreTransaction = async (
             "increment"
         );
 
-        return serialize(restored);
+        return serialize(
+            mapTransaction(restored)
+        );
     });
 };
 
@@ -297,21 +343,21 @@ export const getRecentTransactions = async (
     userId: string,
     limit = 5
 ) => {
-    return prisma.transaction.findMany({
+    const trx = await prisma.transaction.findMany({
         where: {
             userId,
             deletedAt: null,
         },
-        include: {
-            category: true,
-            sourceAccount: true,
-            destinationAccount: true,
-        },
+        include: transactionInclude,
         orderBy: {
             date: "desc",
         },
         take: limit,
     });
+
+    return serialize(
+        trx.map(mapTransaction)
+    );
 };
 
 export const getTransactions = async (
@@ -323,17 +369,15 @@ export const getTransactions = async (
                 userId,
                 deletedAt: null,
             },
-            include: {
-                category: true,
-                sourceAccount: true,
-                destinationAccount: true,
-            },
+            include: transactionInclude,
             orderBy: {
                 date: "desc",
             },
         });
 
-    return serialize(trx);
+    return serialize(
+        trx.map(mapTransaction)
+    );
 };
 
 export const getTransactionById = async (userId: string, transactionId: string) => {
@@ -343,15 +387,13 @@ export const getTransactionById = async (userId: string, transactionId: string) 
             userId,
             deletedAt: null,
         },
-        include: {
-            category: true,
-            sourceAccount: true,
-            destinationAccount: true,
-        },
+        include: transactionInclude,
     });
 
     if (!trx) throw new Error("Transaction not found");
-    return serialize(trx);
+    return serialize(
+        mapTransaction(trx)
+    );
 };
 
 export const updateTransaction = async (
@@ -370,6 +412,7 @@ export const updateTransaction = async (
     }
 ) => {
     return prisma.$transaction(async tx => {
+
         const existing = await tx.transaction.findFirst({
             where: {
                 id: transactionId,
@@ -465,14 +508,14 @@ export const updateTransaction = async (
         let categoryId =
             data.categoryId ?? existing.categoryId;
 
-        let categoryAssignmentSource =
-            existing.categoryAssignmentSource;
+        let categoryAssignmentSource = existing.categoryAssignmentSource;
+        let aiCategoryConfidence = existing.aiCategoryConfidence;
 
         if (data.type !== TransactionType.TRANSFER) {
 
             if (data.categoryId) {
-                categoryAssignmentSource =
-                    CategoryAssignmentSource.USER;
+                categoryAssignmentSource = CategoryAssignmentSource.USER;
+                aiCategoryConfidence = null;
             }
 
             if (!categoryId) {
@@ -490,6 +533,7 @@ export const updateTransaction = async (
 
                 categoryId = result.category.id;
                 categoryAssignmentSource = result.categoryAssignmentSource;
+                aiCategoryConfidence = result.confidence;
             }
 
             const category = await tx.category.findFirst({
@@ -550,7 +594,6 @@ export const updateTransaction = async (
         /* =============================
            UPDATE TRANSACTION
         ============================== */
-
         const updated = await tx.transaction.update({
             where: {
                 id: existing.id,
@@ -561,27 +604,16 @@ export const updateTransaction = async (
                 date,
                 year,
                 month,
-
-                categoryId:
-                    data.type === TransactionType.TRANSFER
-                        ? null
-                        : categoryId,
-
-                categoryAssignmentSource:
-                    data.type === TransactionType.TRANSFER
-                        ? CategoryAssignmentSource.USER
-                        : categoryAssignmentSource,
-
+                categoryId: data.type === TransactionType.TRANSFER ? null : categoryId,
+                categoryAssignmentSource: data.type === TransactionType.TRANSFER ? CategoryAssignmentSource.USER : categoryAssignmentSource,
+                aiCategoryConfidence,
                 merchant,
-
                 merchantNormalized,
-
                 sourceAccountId,
-
                 destinationAccountId,
-
                 note: data.note ?? existing.note,
             },
+            include: transactionInclude,
         });
         /* =============================
            LEARN MERCHANT
@@ -631,6 +663,8 @@ export const updateTransaction = async (
             "increment"
         );
 
-        return serialize(updated);
+        return serialize(
+            mapTransaction(updated)
+        );
     });
 };

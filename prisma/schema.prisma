@@ -78,6 +78,7 @@ model Transaction {
   exchangeRate             Decimal?                 @db.Decimal(18, 6)
   merchantNormalized       String?
   categoryAssignmentSource CategoryAssignmentSource @default(USER)
+  aiCategoryConfidence     Float?
 
   @@index([userId])
   @@index([date])

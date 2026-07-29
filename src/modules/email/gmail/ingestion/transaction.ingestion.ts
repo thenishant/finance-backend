@@ -31,6 +31,7 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion,
 
     let categoryId: string | null = null;
     let categoryAssignmentSource: CategoryAssignmentSource = CategoryAssignmentSource.USER;
+    let aiCategoryConfidence: number | null = null;
 
     if (provider === BankProvider.UNKNOWN) {
         return {
@@ -63,6 +64,7 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion,
 
             categoryId = categorization.category.id;
             categoryAssignmentSource = categorization.categoryAssignmentSource;
+            aiCategoryConfidence = categorization.confidence;
         } catch (error) {
             console.error(
                 "Merchant categorization failed", {
@@ -128,38 +130,20 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion,
                         date,
                         year: date.getFullYear(),
                         month: date.getMonth() + 1,
-
-                        merchant:
-                            parsed.merchant ?? null,
-
-                        merchantNormalized:
-                            parsed.merchant
-                                ? normalizeMerchantName(
-                                    parsed.merchant,
-                                )
-                                : null,
-
+                        merchant: parsed.merchant ?? null,
+                        merchantNormalized: parsed.merchant ? normalizeMerchantName(parsed.merchant,) : null,
                         categoryId,
                         categoryAssignmentSource,
-
-                        source:
-                        TransactionSource.GMAIL,
-
-                        sourceAccountId:
-                            sourceAccount?.id ?? null,
-
+                        aiCategoryConfidence,
+                        source: TransactionSource.GMAIL,
+                        sourceAccountId: sourceAccount?.id ?? null,
                         fingerprint,
-
                         metadata: {
                             provider,
                             parserVersion: 1,
-                            accountLast4:
-                                parsed.accountLast4 ?? null,
-                            accountType:
-                                parsed.accountType ??
-                                FinancialAccountType.CREDIT_CARD,
-                            accountMatched:
-                                Boolean(sourceAccount),
+                            accountLast4: parsed.accountLast4 ?? null,
+                            accountType: parsed.accountType ?? FinancialAccountType.CREDIT_CARD,
+                            accountMatched: Boolean(sourceAccount),
                         },
                     },
                 });
@@ -234,9 +218,7 @@ export const processGmailMessage = async (
             sender: gmailMessage.sender,
             subject: gmailMessage.subject,
             body: gmailMessage.body,
-            receivedAt:
-                gmailMessage.receivedAt ??
-                gmailMessage.createdAt,
+            receivedAt: gmailMessage.receivedAt ?? gmailMessage.createdAt,
         });
 
     await prisma.gmailMessage.delete({
