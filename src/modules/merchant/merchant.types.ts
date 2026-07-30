@@ -1,10 +1,39 @@
-import {Category, CategoryAssignmentSource, MerchantMappingSource, TransactionType,} from "@prisma/client";
+import {Category, CategoryAssignmentSource, Merchant, TransactionType,} from "@prisma/client";
+
+/* -------------------------------------------------------------------------- */
+/*                             Merchant Resolution                            */
+
+/* -------------------------------------------------------------------------- */
+
+export interface MerchantAIResponse {
+    merchant: string;
+    confidence: number;
+}
+
+export interface MerchantResolveResult {
+    merchant: Merchant;
+    normalizedName: string;
+    confidence: number;
+    fromCache: boolean;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                           Merchant Categorization                          */
+
+/* -------------------------------------------------------------------------- */
 
 export interface MerchantCategoryTreeNode {
     id: string;
     name: string;
     type: TransactionType;
     children: MerchantCategoryTreeNode[];
+}
+
+export interface MerchantCategoryOption {
+    id: string;
+    name: string;
+    path: string;
+    type: TransactionType;
 }
 
 export interface MerchantAIResult {
@@ -14,6 +43,7 @@ export interface MerchantAIResult {
 }
 
 export interface MerchantCategorizationResult {
+    merchant: Merchant;
     category: Category;
     confidence: number;
     reasoning: string;
@@ -21,24 +51,13 @@ export interface MerchantCategorizationResult {
     categoryAssignmentSource: CategoryAssignmentSource;
 }
 
+/* -------------------------------------------------------------------------- */
+/*                                   Inputs                                   */
+
+/* -------------------------------------------------------------------------- */
+
 export interface CategorizeMerchantInput {
     userId: string;
-    merchantName: string;
+    merchant: Merchant;
     transactionType: TransactionType;
-}
-
-export interface UpsertMerchantMappingInput {
-    userId: string;
-    normalizedName: string;
-    displayName?: string | null;
-    categoryId: string;
-    source: MerchantMappingSource;
-    confidence?: number | null;
-}
-
-export interface MerchantCategoryOption {
-    id: string;
-    name: string;
-    path: string;
-    type: TransactionType;
 }

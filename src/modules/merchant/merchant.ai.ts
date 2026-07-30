@@ -1,29 +1,59 @@
 import {TransactionType} from "@prisma/client";
 
 import {openai} from "../../lib/openai";
-import {MerchantAIResult, MerchantCategoryOption,} from "./merchant.types";
+import {MerchantAIResponse, MerchantAIResult, MerchantCategoryOption,} from "./merchant.types";
 
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
 
-const SYSTEM_PROMPT = `
+/* -------------------------------------------------------------------------- */
+/*                         Merchant Resolution Prompt                         */
+/* -------------------------------------------------------------------------- */
+
+const MERCHANT_SYSTEM_PROMPT = `
+You are an expert at recognizing merchant names from financial transactions.
+Your task is to normalize a merchant into its canonical public brand.
+Examples:
+AMZN MKTPLACE
+→ Amazon
+AMAZON SELLER SERVICES PRIVATE LIMITED
+→ Amazon
+SWIGGY LIMITED
+→ Swiggy
+FLIPKART INTERNET PRIVATE LIMITED
+→ Flipkart
+NETFLIX.COM
+→ Netflix
+Rules:
+1. Return the public brand only.
+2. Remove legal suffixes.
+3. Remove payment gateway prefixes.
+4. Never invent a merchant.
+5. Preserve correct capitalization.
+6. Confidence must be between 0 and 1.
+7. Return ONLY valid JSON.
+Return format:
+{
+    "merchant": "Amazon",
+    "confidence": 0.99
+}
+`;
+
+/* -------------------------------------------------------------------------- */
+/*                        Merchant Categorization Prompt                      */
+/* -------------------------------------------------------------------------- */
+
+const CATEGORY_SYSTEM_PROMPT = `
 You are an expert financial transaction categorization assistant.
-
 Your task is to classify a merchant into ONE existing category.
-
 You will receive a list of leaf categories. Each category has:
-
 - id (must be returned exactly as provided)
 - path (full hierarchy)
-
 Examples:
-
 Transport > Fuel
 Transport > Fastag
 Food > Restaurants
 Food > Groceries
-
 Rules:
-
 1. Select exactly ONE category.
 2. Always choose the MOST SPECIFIC category.
 3. Never invent or modify category IDs.
@@ -32,17 +62,76 @@ Rules:
 6. If multiple categories seem suitable, choose the closest semantic match.
 7. Confidence must be between 0 and 1.
 8. Return ONLY valid JSON.
-9. If the merchant name does not provide enough information to confidently classify it, choose the "Extra > Misc" category (or the equivalent miscellaneous category if available).
-10. Do not guess a specific category without reasonable evidence.
+9. Do not guess a specific category without reasonable evidence.
 
 Return format:
-
 {
-  "categoryId": "<existing id>",
-  "confidence": 0.97,
-  "reasoning": "short explanation"
+    "categoryId":"...",
+    "confidence":0.97,
+    "reasoning":"..."
 }
 `;
+
+/* -------------------------------------------------------------------------- */
+/*                           Resolve Merchant (AI)                            */
+/* -------------------------------------------------------------------------- */
+
+export const resolveMerchantWithAI = async (
+    merchantName: string,
+): Promise<MerchantAIResponse> => {
+
+    const response = await openai.chat.completions.create({
+        model: MODEL,
+        temperature: 0,
+        response_format: {
+            type: "json_object",
+        },
+        messages: [
+            {
+                role: "system",
+                content: MERCHANT_SYSTEM_PROMPT,
+            },
+            {
+                role: "user",
+                content: merchantName,
+            },
+        ],
+    });
+
+    const text =
+        response.choices[0]?.message?.content?.trim();
+
+    if (!text) {
+        throw new Error("OpenAI returned an empty response.");
+    }
+
+    let result: MerchantAIResponse;
+
+    try {
+        result = JSON.parse(text);
+    } catch {
+        throw new Error("Failed to parse merchant AI response.");
+    }
+
+    if (!result.merchant) {
+        throw new Error("AI did not return a merchant.");
+    }
+
+    if (typeof result.confidence !== "number") {
+        result.confidence = 0;
+    }
+
+    result.confidence = Math.max(
+        0,
+        Math.min(1, result.confidence),
+    );
+
+    return result;
+};
+
+/* -------------------------------------------------------------------------- */
+/*                        Categorize Merchant (AI)                            */
+/* -------------------------------------------------------------------------- */
 
 export const categorizeMerchantWithAI = async (
     merchantName: string,
@@ -50,8 +139,6 @@ export const categorizeMerchantWithAI = async (
     categoryOptions: MerchantCategoryOption[],
 ): Promise<MerchantAIResult> => {
 
-    // Keep only the information the model actually needs.
-    // This reduces prompt size and improves classification quality.
     const availableCategories = categoryOptions.map(category => ({
         id: category.id,
         path: category.path,
@@ -64,11 +151,8 @@ ${transactionType}
 Merchant:
 ${merchantName}
 
-Available Categories (leaf categories only):
-
+Available Categories:
 ${JSON.stringify(availableCategories, null, 2)}
-
-Choose the SINGLE best category.
 
 Return ONLY valid JSON.
 `;
@@ -76,27 +160,23 @@ Return ONLY valid JSON.
     const response = await openai.chat.completions.create({
         model: MODEL,
         temperature: 0,
+        response_format: {
+            type: "json_object",
+        },
         messages: [
             {
                 role: "system",
-                content: SYSTEM_PROMPT,
+                content: CATEGORY_SYSTEM_PROMPT,
             },
             {
                 role: "user",
                 content: prompt,
             },
         ],
-        response_format: {
-            type: "json_object",
-        },
     });
 
     const text =
         response.choices[0]?.message?.content?.trim();
-
-    console.log("===== AI RAW RESPONSE =====");
-    console.log(text);
-    console.log("===========================");
 
     if (!text) {
         throw new Error("OpenAI returned an empty response.");
@@ -107,11 +187,11 @@ Return ONLY valid JSON.
     try {
         result = JSON.parse(text);
     } catch {
-        throw new Error("Failed to parse AI response.");
+        throw new Error("Failed to parse category AI response.");
     }
 
     if (!result.categoryId) {
-        throw new Error("AI did not return a categoryId.");
+        throw new Error("AI did not return a category.");
     }
 
     if (typeof result.confidence !== "number") {
@@ -125,14 +205,13 @@ Return ONLY valid JSON.
 
     result.reasoning ??= "";
 
-    // Validate that the returned ID exists in the supplied categories.
-    const validCategory = availableCategories.some(
+    const valid = availableCategories.some(
         category => category.id === result.categoryId,
     );
 
-    if (!validCategory) {
+    if (!valid) {
         throw new Error(
-            `AI returned an unknown categoryId: ${result.categoryId}`,
+            `Unknown categoryId returned: ${result.categoryId}`,
         );
     }
 

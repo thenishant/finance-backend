@@ -63,6 +63,23 @@ const TRANSACTION_PREFIXES = [
     "CREDIT CARD",
 ] as const;
 
+const REPLACEMENTS = [
+    /\bPRIVATE LIMITED\b/g,
+    /\bPVT LTD\b/g,
+    /\bPVT\. LTD\.\b/g,
+    /\bLIMITED\b/g,
+    /\bLTD\b/g,
+];
+
+export const normalizeMerchant = (merchant: string): string => {
+    let value = merchant.toUpperCase().trim();
+    for (const regex of REPLACEMENTS) {
+        value = value.replace(regex, "");
+    }
+    value = value.replace(/\s+/g, " ").trim();
+    return value;
+};
+
 const escapeRegex = (value: string): string =>
     value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 

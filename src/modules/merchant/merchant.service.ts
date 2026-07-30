@@ -1,75 +1,359 @@
-import {CategoryAssignmentSource, MerchantMappingSource} from "@prisma/client";
+import {Category, CategoryAssignmentSource, Merchant, MerchantMappingSource, TransactionType,} from "@prisma/client";
 
 import {prisma} from "../../database/prisma";
-import {categorizeMerchantWithAI} from "./merchant.ai";
-import {getCategoryById, getMerchantCategoryOptions} from "./merchant.category";
-import {upsertMerchantMapping} from "./merchant.mapping.service";
+import {
+    CategorizeMerchantInput,
+    MerchantCategorizationResult,
+    MerchantCategoryOption,
+    MerchantResolveResult,
+} from "./merchant.types";
+import {categorizeMerchantWithAI, resolveMerchantWithAI} from "./merchant.ai";
 import {normalizeMerchantName} from "./merchant.normalizer";
-import {CategorizeMerchantInput, MerchantCategorizationResult,} from "./merchant.types";
 
-export const categorizeMerchant = async ({
-                                             userId,
-                                             merchantName,
-                                             transactionType,
-                                         }: CategorizeMerchantInput): Promise<MerchantCategorizationResult> => {
-    const normalizedName = normalizeMerchantName(merchantName);
+/* -------------------------------------------------------------------------- */
+/*                              Category Helpers                              */
+/* -------------------------------------------------------------------------- */
 
-    if (!normalizedName) {
-        throw new Error("Unable to normalize merchant name.");
+export const getMerchantCategoryOptions = async (
+    userId: string,
+    transactionType: TransactionType,
+): Promise<MerchantCategoryOption[]> => {
+
+    const categories = await prisma.category.findMany({
+        where: {
+            userId,
+            type: transactionType,
+        },
+        orderBy: {
+            name: "asc",
+        },
+    });
+
+    const byId = new Map<string, Category>();
+
+    for (const category of categories) {
+        byId.set(category.id, category);
     }
 
-    console.info("[Merchant] Categorizing", {
-        merchant: merchantName,
-        normalizedMerchant: normalizedName,
-        transactionType,
-    });
+    const hasChildren = new Set<string>();
 
-    /**
-     * 1. Check cache
-     */
-    const existing = await prisma.merchantMapping.findUnique({
+    for (const category of categories) {
+        if (category.parentId) {
+            hasChildren.add(category.parentId);
+        }
+    }
+
+    const buildPath = (category: Category): string => {
+        const path: string[] = [];
+
+        let current: Category | undefined = category;
+
+        while (current) {
+            path.unshift(current.name);
+
+            current = current.parentId
+                ? byId.get(current.parentId)
+                : undefined;
+        }
+
+        return path.join(" > ");
+    };
+
+    return categories
+        .filter(category => !hasChildren.has(category.id))
+        .sort((a, b) => buildPath(a).localeCompare(buildPath(b)))
+        .map(category => ({
+            id: category.id,
+            name: category.name,
+            path: buildPath(category),
+            type: category.type,
+        }));
+};
+
+export const getCategoryById = (
+    userId: string,
+    categoryId: string,
+) => {
+    return prisma.category.findFirst({
         where: {
-            userId_normalizedName: {
-                userId,
-                normalizedName,
-            },
+            id: categoryId,
+            userId,
+        },
+    });
+};
+
+/* -------------------------------------------------------------------------- */
+/*                              Merchant CRUD                                 */
+/* -------------------------------------------------------------------------- */
+
+export const findMerchantById = (
+    merchantId: string,
+) => {
+    return prisma.merchant.findUnique({
+        where: {
+            id: merchantId,
         },
         include: {
-            category: true,
+            aliases: true,
+        },
+    });
+};
+
+export const findMerchantByName = (
+    name: string,
+) => {
+    return prisma.merchant.findUnique({
+        where: {
+            name,
+        },
+        include: {
+            aliases: true,
+        },
+    });
+};
+
+export const findMerchantByAlias = (
+    alias: string,
+) => {
+    return prisma.merchantAlias.findUnique({
+        where: {
+            alias,
+        },
+        include: {
+            merchant: {
+                include: {
+                    aliases: true,
+                },
+            },
+        },
+    });
+};
+
+export const createMerchant = (
+    name: string,
+) => {
+    return prisma.merchant.create({
+        data: {
+            name,
+        },
+    });
+};
+
+export const getOrCreateMerchant = async (
+    name: string,
+): Promise<Merchant> => {
+
+    const existing = await prisma.merchant.findUnique({
+        where: {
+            name,
         },
     });
 
-    if (
-        existing &&
-        existing.category.type === transactionType
-    ) {
-        console.info("[Merchant] Cache hit", {
-            merchant: merchantName,
-            normalizedMerchant: normalizedName,
-            category: existing.category.name,
-            confidence: existing.confidence ?? 1,
+    if (existing) {
+        return existing;
+    }
+
+    return prisma.merchant.create({
+        data: {
+            name,
+        },
+    });
+};
+
+export const addAliasIfMissing = (
+    merchantId: string,
+    alias: string,
+) => {
+    return prisma.merchantAlias.upsert({
+        where: {
+            alias,
+        },
+        update: {},
+        create: {
+            merchantId,
+            alias,
+        },
+    });
+};
+
+/* -------------------------------------------------------------------------- */
+/*                           Merchant Resolution                              */
+/* -------------------------------------------------------------------------- */
+
+export const resolveMerchant = async (
+    merchantName: string,
+): Promise<MerchantResolveResult> => {
+
+    const normalizedName = normalizeMerchantName(
+        merchantName,
+    );
+
+    if (!normalizedName) {
+        throw new Error(
+            "Unable to normalize merchant name.",
+        );
+    }
+
+    console.info("[Merchant] Resolving", {
+        merchant: merchantName,
+        normalizedMerchant: normalizedName,
+    });
+
+    /* ---------------------------------------------------------------------- */
+    /* Alias Lookup                                                            */
+    /* ---------------------------------------------------------------------- */
+
+    const alias = await findMerchantByAlias(
+        normalizedName,
+    );
+
+    if (alias) {
+
+        console.info("[Merchant] Alias hit", {
+            alias: normalizedName,
+            merchant: alias.merchant.name,
         });
 
         return {
-            category: existing.category,
-            confidence: existing.confidence ?? 1,
-            reasoning: "Merchant previously categorized.",
+            merchant: alias.merchant,
+            normalizedName,
+            confidence: 1,
             fromCache: true,
-            categoryAssignmentSource:
-            CategoryAssignmentSource.AI_EXISTING,
         };
     }
 
-    console.info("[Merchant] Cache miss", {
+    /* ---------------------------------------------------------------------- */
+    /* Exact Merchant Lookup                                                   */
+    /* ---------------------------------------------------------------------- */
+
+    const existingMerchant =
+        await findMerchantByName(
+            normalizedName,
+        );
+
+    if (existingMerchant) {
+
+        await addAliasIfMissing(
+            existingMerchant.id,
+            normalizedName,
+        );
+
+        console.info("[Merchant] Merchant hit", {
+            merchant: existingMerchant.name,
+        });
+
+        return {
+            merchant: existingMerchant,
+            normalizedName,
+            confidence: 1,
+            fromCache: true,
+        };
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* AI Resolution                                                           */
+    /* ---------------------------------------------------------------------- */
+
+    console.info("[Merchant] Calling AI", {
         merchant: merchantName,
-        normalizedMerchant: normalizedName,
     });
 
-    /**
-     * 2. Load category tree
-     */
-    const categoryOptions = await getMerchantCategoryOptions(userId, transactionType,);
+    const aiResult =
+        await resolveMerchantWithAI(
+            merchantName,
+        );
 
+    console.info("[Merchant] AI resolved", {
+        merchant: aiResult.merchant,
+        confidence: aiResult.confidence,
+    });
+
+    const merchant =
+        await getOrCreateMerchant(
+            aiResult.merchant,
+        );
+
+    await addAliasIfMissing(
+        merchant.id,
+        normalizedName,
+    );
+
+    console.info("[Merchant] Alias learned", {
+        alias: normalizedName,
+        merchant: merchant.name,
+    });
+
+    return {
+        merchant,
+        normalizedName,
+        confidence: aiResult.confidence,
+        fromCache: false,
+    };
+};
+
+/* -------------------------------------------------------------------------- */
+/*                         Merchant Categorization                            */
+/* -------------------------------------------------------------------------- */
+
+export const categorizeMerchant = async ({
+                                             userId,
+                                             merchant,
+                                             transactionType,
+                                         }: CategorizeMerchantInput): Promise<MerchantCategorizationResult> => {
+
+    console.info("[Merchant] Categorizing", {
+        merchant: merchant.name,
+        transactionType,
+    });
+
+    /* ---------------------------------------------------------------------- */
+    /* Merchant Mapping Lookup                                                 */
+    /* ---------------------------------------------------------------------- */
+
+    const existingMapping =
+        await prisma.merchantMapping.findUnique({
+            where: {
+                userId_merchantId: {
+                    userId,
+                    merchantId: merchant.id,
+                },
+            },
+            include: {
+                category: true,
+            },
+        });
+
+    if (
+        existingMapping &&
+        existingMapping.category.type === transactionType
+    ) {
+        console.info("[Merchant] Mapping hit", {
+            merchant: merchant.name,
+            category: existingMapping.category.name,
+        });
+
+        return {
+            merchant,
+            category: existingMapping.category,
+            confidence: existingMapping.confidence ?? 1,
+            reasoning: "Previously categorized.",
+            fromCache: true,
+            categoryAssignmentSource:
+                existingMapping.source === MerchantMappingSource.USER
+                    ? CategoryAssignmentSource.USER
+                    : CategoryAssignmentSource.AI_EXISTING,
+        };
+    }
+
+    /* ---------------------------------------------------------------------- */
+    /* Load Categories                                                        */
+    /* ---------------------------------------------------------------------- */
+
+    const categoryOptions =
+        await getMerchantCategoryOptions(
+            userId,
+            transactionType,
+        );
 
     if (categoryOptions.length === 0) {
         throw new Error(
@@ -77,63 +361,65 @@ export const categorizeMerchant = async ({
         );
     }
 
-    console.log("categoryOptions: ", categoryOptions);
-    console.info("[Merchant] Calling AI", {
-        merchant: merchantName,
-        categoryCount: categoryOptions.length,
-    });
+    /* ---------------------------------------------------------------------- */
+    /* Ask AI                                                                 */
+    /* ---------------------------------------------------------------------- */
 
-    /**
-     * 3. Ask AI
-     */
-    const aiResult = await categorizeMerchantWithAI(
-        merchantName,
-        transactionType,
-        categoryOptions,
-    );
+    const aiResult =
+        await categorizeMerchantWithAI(
+            merchant.name,
+            transactionType,
+            categoryOptions,
+        );
 
-    console.info("[Merchant] AI response", {
-        merchant: merchantName,
-        categoryId: aiResult.categoryId,
-        confidence: aiResult.confidence,
-        reasoning: aiResult.reasoning,
-    });
+    /* ---------------------------------------------------------------------- */
+    /* Validate Category                                                      */
+    /* ---------------------------------------------------------------------- */
 
-    /**
-     * 4. Validate category
-     */
-    const category = await getCategoryById(
-        userId,
-        aiResult.categoryId,
-    );
+    const category =
+        await getCategoryById(
+            userId,
+            aiResult.categoryId,
+        );
 
     if (!category) {
-        throw new Error("AI returned an invalid category.");
+        throw new Error(
+            "AI returned an invalid category.",
+        );
     }
 
-    /**
-     * 5. Save merchant mapping
-     */
-    await upsertMerchantMapping({
-        userId,
-        merchant: merchantName,
-        normalizedName,
-        categoryId: category.id,
-        source: MerchantMappingSource.AI,
-        confidence: aiResult.confidence,
+    /* ---------------------------------------------------------------------- */
+    /* Save Mapping                                                           */
+    /* ---------------------------------------------------------------------- */
+
+    await prisma.merchantMapping.upsert({
+        where: {
+            userId_merchantId: {
+                userId,
+                merchantId: merchant.id,
+            },
+        },
+        update: {
+            categoryId: category.id,
+            source: MerchantMappingSource.AI,
+            confidence: aiResult.confidence,
+        },
+        create: {
+            userId,
+            merchantId: merchant.id,
+            categoryId: category.id,
+            source: MerchantMappingSource.AI,
+            confidence: aiResult.confidence,
+        },
     });
 
-    console.info("[Merchant] Mapping saved", {
-        merchant: merchantName,
-        normalizedMerchant: normalizedName,
+    console.info("[Merchant] Mapping learned", {
+        merchant: merchant.name,
         category: category.name,
-        confidence: aiResult.confidence,
     });
 
-    /**
-     * 6. Return result
-     */
     return {
+        merchant,
         category,
         confidence: aiResult.confidence,
         reasoning: aiResult.reasoning,
@@ -141,4 +427,46 @@ export const categorizeMerchant = async ({
         categoryAssignmentSource:
         CategoryAssignmentSource.AI_EXISTING,
     };
+};
+/* -------------------------------------------------------------------------- */
+/*                            Merchant Learning                               */
+/* -------------------------------------------------------------------------- */
+
+export const learnMerchantCategory = async (
+    userId: string,
+    merchantId: string,
+    categoryId: string,
+) => {
+
+    const category = await getCategoryById(
+        userId,
+        categoryId,
+    );
+
+    if (!category) {
+        throw new Error("Category not found.");
+    }
+
+    await prisma.merchantMapping.upsert({
+        where: {
+            userId_merchantId: {
+                userId,
+                merchantId,
+            },
+        },
+        update: {
+            categoryId,
+            source: MerchantMappingSource.USER,
+            confidence: 1,
+        },
+        create: {
+            userId,
+            merchantId,
+            categoryId,
+            source: MerchantMappingSource.USER,
+            confidence: 1,
+        },
+    });
+
+    return category;
 };

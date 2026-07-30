@@ -10,8 +10,7 @@ import {
 
 import {prisma} from "../../../../database/prisma";
 import {postTransactionToLedger} from "../../../ledger/ledger.service";
-import {categorizeMerchant} from "../../../merchant/merchant.service";
-import {normalizeMerchantName} from "../../../merchant/merchant.normalizer";
+import {categorizeMerchant, resolveMerchant} from "../../../merchant/merchant.service";
 import {updateAnalytics} from "../../../transactions/transaction.service";
 import {BankProvider, detectBankProvider} from "../detector/bank.detector";
 import {parseEmail} from "../parsers/parser.factory";
@@ -28,46 +27,44 @@ export interface GmailEmailForIngestion {
 export const ingestGmailEmail = async (email: GmailEmailForIngestion,
 ) => {
     const provider = detectBankProvider(email.sender);
-
-    let categoryId: string | null = null;
-    let categoryAssignmentSource: CategoryAssignmentSource = CategoryAssignmentSource.USER;
-    let aiCategoryConfidence: number | null = null;
-
     if (provider === BankProvider.UNKNOWN) {
         return {
             status: "unsupported" as const,
         };
     }
-
     const parsed = parseEmail(
         provider,
         email.subject,
         email.body,
     );
 
+    let merchantId: string | null = null;
+    let merchantRaw: string | null = null;
+
+    let categoryId: string | null = null;
+    let categoryAssignmentSource: CategoryAssignmentSource = CategoryAssignmentSource.USER;
+    let aiCategoryConfidence: number | null = null;
+
     if (!parsed) {
-        return {
-            status: "not-a-transaction" as const,
-        };
+        return {status: "not-a-transaction" as const,};
     }
 
-    if (
-        parsed.merchant &&
-        parsed.type !== TransactionType.TRANSFER
-    ) {
+    if (parsed.merchant && parsed.type !== TransactionType.TRANSFER) {
         try {
-            const categorization = await categorizeMerchant({
-                userId: email.userId,
-                merchantName: parsed.merchant,
-                transactionType: parsed.type,
-            });
-
+            merchantRaw = parsed.merchant.trim();
+            const resolvedMerchant = await resolveMerchant(merchantRaw);
+            merchantId = resolvedMerchant.merchant.id;
+            const categorization =
+                await categorizeMerchant({
+                    userId: email.userId,
+                    merchant: resolvedMerchant.merchant,
+                    transactionType: parsed.type,
+                });
             categoryId = categorization.category.id;
             categoryAssignmentSource = categorization.categoryAssignmentSource;
             aiCategoryConfidence = categorization.confidence;
         } catch (error) {
-            console.error(
-                "Merchant categorization failed", {
+            console.error("Merchant categorization failed", {
                     merchant: parsed.merchant,
                     provider,
                 },
@@ -86,7 +83,6 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion,
 
     try {
         return await prisma.$transaction(async tx => {
-
             const existing =
                 await tx.transaction.findUnique({
                     where: {
@@ -117,10 +113,7 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion,
                     })
                     : null;
 
-            const amount = new Prisma.Decimal(
-                parsed.amount,
-            );
-
+            const amount = new Prisma.Decimal(parsed.amount,);
             const transaction =
                 await tx.transaction.create({
                     data: {
@@ -130,8 +123,8 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion,
                         date,
                         year: date.getFullYear(),
                         month: date.getMonth() + 1,
-                        merchant: parsed.merchant ?? null,
-                        merchantNormalized: parsed.merchant ? normalizeMerchantName(parsed.merchant,) : null,
+                        merchantId,
+                        merchantRaw,
                         categoryId,
                         categoryAssignmentSource,
                         aiCategoryConfidence,
@@ -174,16 +167,9 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion,
         });
     } catch (error) {
 
-        if (
-            error instanceof
-            Prisma.PrismaClientKnownRequestError &&
-            error.code === "P2002"
-        ) {
-            return {
-                status: "duplicate" as const,
-            };
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+            return {status: "duplicate" as const,};
         }
-
         throw error;
     }
 };

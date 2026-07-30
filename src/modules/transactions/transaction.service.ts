@@ -1,9 +1,7 @@
 import {prisma} from "../../database/prisma";
 import {CategoryAssignmentSource, Prisma, TransactionType} from "@prisma/client";
 import {postTransactionToLedger} from "../ledger/ledger.service";
-import {categorizeMerchant} from "../merchant/merchant.service";
-import {normalizeMerchantName} from "../merchant/merchant.normalizer";
-import {learnMerchantCategory} from "../merchant/merchant.learning.service";
+import {categorizeMerchant, learnMerchantCategory, resolveMerchant} from "../merchant/merchant.service";
 import {needsCategoryReview} from "../merchant/merchant.review";
 
 const serialize = <T>(obj: T): T =>
@@ -16,6 +14,10 @@ const mapTransaction = <
     T extends {
         categoryAssignmentSource: CategoryAssignmentSource;
         aiCategoryConfidence: number | null;
+        merchant?: {
+            id: string;
+            name: string;
+        } | null;
         category?: {
             name: string;
         } | null;
@@ -33,6 +35,7 @@ const mapTransaction = <
 
 const transactionInclude = {
     category: true,
+    merchant: true,
     sourceAccount: true,
     destinationAccount: true,
 } satisfies Prisma.TransactionInclude;
@@ -84,12 +87,13 @@ export const createTransaction = async (
         destinationAccountId?: string;
         note?: string;
         idempotencyKey?: string;
-    }
+    },
 ) => {
     return prisma.$transaction(async tx => {
         if (!data.type) {
             throw new Error("Transaction type required");
         }
+
         const amount = new Prisma.Decimal(data.amount);
 
         if (amount.lte(0)) {
@@ -105,16 +109,16 @@ export const createTransaction = async (
         const year = date.getFullYear();
         const month = date.getMonth() + 1;
 
+        /* ------------------------------------------------------------------ */
+        /* Idempotency                                                        */
+        /* ------------------------------------------------------------------ */
+
         if (data.idempotencyKey) {
-            const existing =
-                await tx.transaction.findUnique(
-                    {
-                        where: {
-                            idempotencyKey:
-                            data.idempotencyKey,
-                        },
-                    }
-                );
+            const existing = await tx.transaction.findUnique({
+                where: {
+                    idempotencyKey: data.idempotencyKey,
+                },
+            });
 
             if (existing) {
                 const transaction = await tx.transaction.findUnique({
@@ -128,58 +132,123 @@ export const createTransaction = async (
                     throw new Error("Transaction not found");
                 }
 
-                return serialize(
-                    mapTransaction(transaction)
-                );
+                return serialize(mapTransaction(transaction));
             }
         }
 
+        /* ------------------------------------------------------------------ */
+        /* Accounts                                                           */
+        /* ------------------------------------------------------------------ */
+
         const findAccount = (accountId?: string) =>
             accountId
-                ? tx.financialAccount.findFirst(
-                    {
-                        where: {
-                            id: accountId,
-                            userId,
-                            deletedAt: null,
-                            isArchived: false,
-                        },
-                    }
-                ) : Promise.resolve(null);
+                ? tx.financialAccount.findFirst({
+                    where: {
+                        id: accountId,
+                        userId,
+                        deletedAt: null,
+                        isArchived: false,
+                    },
+                })
+                : Promise.resolve(null);
 
-        const fromAccount =
-            await findAccount(data.sourceAccountId);
+        const fromAccount = await findAccount(
+            data.sourceAccountId,
+        );
 
-        const toAccount =
-            await findAccount(data.destinationAccountId);
+        const toAccount = await findAccount(
+            data.destinationAccountId,
+        );
 
-        if (data.type === TransactionType.INCOME && !toAccount) {
-            throw new Error("Invalid destination account");
+        if (
+            data.type === TransactionType.INCOME &&
+            !toAccount
+        ) {
+            throw new Error(
+                "Invalid destination account",
+            );
         }
 
-        if ((data.type === TransactionType.EXPENSE || data.type === TransactionType.INVESTMENT) && !fromAccount) {
-            throw new Error("Invalid source account");
+        if (
+            (
+                data.type ===
+                TransactionType.EXPENSE ||
+                data.type ===
+                TransactionType.INVESTMENT
+            ) &&
+            !fromAccount
+        ) {
+            throw new Error(
+                "Invalid source account",
+            );
         }
 
         if (data.type === TransactionType.TRANSFER) {
             if (!fromAccount || !toAccount) {
-                throw new Error("Both accounts are required");
+                throw new Error(
+                    "Both accounts are required",
+                );
             }
 
             if (fromAccount.id === toAccount.id) {
-                throw new Error("Cannot transfer to same account");
+                throw new Error(
+                    "Cannot transfer to same account",
+                );
+            }
+        }
+
+        /* ------------------------------------------------------------------ */
+        /* Merchant + Category                                                */
+        /* ------------------------------------------------------------------ */
+
+        let merchantId: string | null = null;
+        let merchantRaw: string | null = null;
+
+        let categoryId: string | null = data.categoryId ?? null;
+        let categoryAssignmentSource: CategoryAssignmentSource =
+            CategoryAssignmentSource.USER;
+        let aiCategoryConfidence: number | null = null;
+
+        if (data.merchant?.trim()) {
+            merchantRaw = data.merchant.trim();
+
+            const resolvedMerchant =
+                await resolveMerchant(merchantRaw);
+
+            merchantId = resolvedMerchant.merchant.id;
+
+            if (
+                data.type !== TransactionType.TRANSFER &&
+                !categoryId
+            ) {
+                const categorization =
+                    await categorizeMerchant({
+                        userId,
+                        merchant: resolvedMerchant.merchant,
+                        transactionType: data.type,
+                    });
+
+                categoryId = categorization.category.id;
+                categoryAssignmentSource =
+                    categorization.categoryAssignmentSource;
+                aiCategoryConfidence =
+                    categorization.confidence;
             }
         }
 
         if (
-            data.type !== TransactionType.TRANSFER && !data.categoryId) {
-            throw new Error("categoryId required");
+            data.type !== TransactionType.TRANSFER &&
+            !categoryId
+        ) {
+            throw new Error(
+                "Either categoryId or merchant is required.",
+            );
         }
 
-        if (data.categoryId) {
+        if (categoryId) {
             const category = await tx.category.findFirst({
                 where: {
-                    id: data.categoryId,
+                    id: categoryId,
                     userId,
                 },
             });
@@ -193,37 +262,83 @@ export const createTransaction = async (
                 category.type !== data.type
             ) {
                 throw new Error(
-                    "Category type does not match transaction type"
+                    "Category type does not match transaction type",
                 );
             }
         }
 
-        const merchant = data.merchant?.trim() || null;
+        /* ------------------------------------------------------------------ */
+        /* Create Transaction                                                 */
+        /* ------------------------------------------------------------------ */
 
-        const trx = await tx.transaction.create({
-            data: {
-                userId,
-                type: data.type,
-                amount,
-                date,
-                year,
-                month,
-                categoryId: data.type === TransactionType.TRANSFER ? null : data.categoryId,
-                categoryAssignmentSource: CategoryAssignmentSource.USER,
-                aiCategoryConfidence: null,
-                merchant,
-                merchantNormalized: merchant ? normalizeMerchantName(merchant) : null,
-                sourceAccountId: data.sourceAccountId ?? null,
-                destinationAccountId: data.destinationAccountId ?? null,
-                note: data.note ?? null,
-                idempotencyKey: data.idempotencyKey ?? null,
-            },
-            include: transactionInclude,
-        });
-        await postTransactionToLedger(tx, userId, trx, amount);
-        await updateAnalytics(tx, userId, year, month, data.type, amount, "increment");
+        const trx =
+            await tx.transaction.create({
+                data: {
+                    userId,
+                    type: data.type,
+                    amount,
+                    date,
+                    year,
+                    month,
+
+                    categoryId:
+                        data.type ===
+                        TransactionType.TRANSFER
+                            ? null
+                            : categoryId,
+
+                    categoryAssignmentSource:
+                        data.type ===
+                        TransactionType.TRANSFER
+                            ? CategoryAssignmentSource.USER
+                            : categoryAssignmentSource,
+
+                    aiCategoryConfidence,
+
+                    merchantId,
+                    merchantRaw,
+
+                    sourceAccountId:
+                        data.sourceAccountId ??
+                        null,
+
+                    destinationAccountId:
+                        data.destinationAccountId ??
+                        null,
+
+                    note:
+                        data.note ?? null,
+
+                    idempotencyKey:
+                        data.idempotencyKey ??
+                        null,
+                },
+                include: transactionInclude,
+            });
+
+        /* ------------------------------------------------------------------ */
+        /* Ledger + Analytics                                                 */
+        /* ------------------------------------------------------------------ */
+
+        await postTransactionToLedger(
+            tx,
+            userId,
+            trx,
+            amount,
+        );
+
+        await updateAnalytics(
+            tx,
+            userId,
+            year,
+            month,
+            data.type,
+            amount,
+            "increment",
+        );
+
         return serialize(
-            mapTransaction(trx)
+            mapTransaction(trx),
         );
     });
 };
@@ -498,42 +613,73 @@ export const updateTransaction = async (
    CATEGORY VALIDATION
 ============================= */
 
-        if (
-            data.type === TransactionType.TRANSFER &&
-            data.categoryId
-        ) {
+        if (data.type === TransactionType.TRANSFER && data.categoryId) {
             throw new Error("Transfers cannot have categories");
         }
 
-        let categoryId =
+        let categoryId: string | null =
             data.categoryId ?? existing.categoryId;
 
-        let categoryAssignmentSource = existing.categoryAssignmentSource;
-        let aiCategoryConfidence = existing.aiCategoryConfidence;
+        let categoryAssignmentSource: CategoryAssignmentSource =
+            existing.categoryAssignmentSource;
+
+        let aiCategoryConfidence: number | null =
+            existing.aiCategoryConfidence;
+
+        let merchantId = existing.merchantId;
+        let merchantRaw = existing.merchantRaw;
+
+        if (data.merchant !== undefined) {
+            merchantRaw = data.merchant.trim() || null;
+
+            if (merchantRaw) {
+                const resolvedMerchant =
+                    await resolveMerchant(merchantRaw);
+
+                const newMerchantId =
+                    resolvedMerchant.merchant.id;
+
+                const merchantChanged =
+                    newMerchantId !== existing.merchantId;
+
+                merchantId = newMerchantId;
+
+                const shouldRecategorize =
+                    merchantChanged &&
+                    !data.categoryId &&
+                    existing.categoryAssignmentSource !==
+                    CategoryAssignmentSource.USER;
+
+                if (shouldRecategorize) {
+                    const result =
+                        await categorizeMerchant({
+                            userId,
+                            merchant: resolvedMerchant.merchant,
+                            transactionType: data.type,
+                        });
+
+                    categoryId = result.category.id;
+                    categoryAssignmentSource =
+                        result.categoryAssignmentSource;
+                    aiCategoryConfidence =
+                        result.confidence;
+                }
+            } else {
+                merchantId = null;
+            }
+        }
 
         if (data.type !== TransactionType.TRANSFER) {
-
             if (data.categoryId) {
-                categoryAssignmentSource = CategoryAssignmentSource.USER;
+                categoryAssignmentSource =
+                    CategoryAssignmentSource.USER;
                 aiCategoryConfidence = null;
             }
 
             if (!categoryId) {
-                if (!data.merchant) {
-                    throw new Error(
-                        "Either categoryId or merchant is required."
-                    );
-                }
-
-                const result = await categorizeMerchant({
-                    userId,
-                    merchantName: data.merchant,
-                    transactionType: data.type,
-                });
-
-                categoryId = result.category.id;
-                categoryAssignmentSource = result.categoryAssignmentSource;
-                aiCategoryConfidence = result.confidence;
+                throw new Error(
+                    "Either categoryId or merchant is required.",
+                );
             }
 
             const category = await tx.category.findFirst({
@@ -548,9 +694,7 @@ export const updateTransaction = async (
             }
 
             if (category.type !== data.type) {
-                throw new Error(
-                    "Category type does not match transaction type"
-                );
+                throw new Error("Category type does not match transaction type",);
             }
         }
 
@@ -568,6 +712,7 @@ export const updateTransaction = async (
             "decrement"
         );
 
+
         /* =============================
            REMOVE OLD LEDGER
         ============================== */
@@ -577,19 +722,6 @@ export const updateTransaction = async (
                 transactionId: existing.id,
             },
         });
-
-        /* =============================
-           PREPARE MERCHANT
-        ============================== */
-
-        const merchant =
-            data.merchant !== undefined
-                ? data.merchant.trim() || null
-                : existing.merchant;
-
-        const merchantNormalized = merchant
-            ? normalizeMerchantName(merchant)
-            : null;
 
         /* =============================
            UPDATE TRANSACTION
@@ -607,8 +739,8 @@ export const updateTransaction = async (
                 categoryId: data.type === TransactionType.TRANSFER ? null : categoryId,
                 categoryAssignmentSource: data.type === TransactionType.TRANSFER ? CategoryAssignmentSource.USER : categoryAssignmentSource,
                 aiCategoryConfidence,
-                merchant,
-                merchantNormalized,
+                merchantId,
+                merchantRaw,
                 sourceAccountId,
                 destinationAccountId,
                 note: data.note ?? existing.note,
@@ -622,20 +754,19 @@ export const updateTransaction = async (
         const categoryChanged =
             updated.categoryId !== existing.categoryId;
 
-        const merchantChanged =
-            updated.merchantNormalized !== existing.merchantNormalized;
+        const merchantChanged = updated.merchantId !== existing.merchantId;
 
         if (
             data.updateMerchantMapping &&
-            updated.merchant &&
+            updated.merchantId &&
             updated.categoryId &&
             (categoryChanged || merchantChanged)
         ) {
-            await learnMerchantCategory(tx, {
+            await learnMerchantCategory(
                 userId,
-                merchant: updated.merchant,
-                categoryId: updated.categoryId,
-            });
+                updated.merchantId,
+                updated.categoryId,
+            );
         }
 
         /* =============================

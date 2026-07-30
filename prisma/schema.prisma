@@ -54,7 +54,6 @@ model Transaction {
   date                     DateTime
   year                     Int
   month                    Int
-  merchant                 String?
   note                     String?
   categoryId               String?
   category                 Category?                @relation(fields: [categoryId], references: [id])
@@ -76,9 +75,11 @@ model Transaction {
   status                   TransactionStatus        @default(COMPLETED)
   currency                 String                   @default("INR")
   exchangeRate             Decimal?                 @db.Decimal(18, 6)
-  merchantNormalized       String?
   categoryAssignmentSource CategoryAssignmentSource @default(USER)
   aiCategoryConfidence     Float?
+  merchantId               String?
+  merchant                 Merchant?                @relation(fields: [merchantId], references: [id])
+  merchantRaw              String?
 
   @@index([userId])
   @@index([date])
@@ -89,7 +90,6 @@ model Transaction {
   @@index([sourceAccountId])
   @@index([destinationAccountId])
   @@index([gmailMessageId])
-  @@index([userId, merchantNormalized])
 }
 
 model LedgerEntry {
@@ -199,19 +199,39 @@ model FinancialAccount {
 }
 
 model MerchantMapping {
-  id             String                @id @default(uuid())
-  userId         String
-  user           User                  @relation(fields: [userId], references: [id])
-  normalizedName String
-  displayName    String?
-  categoryId     String
-  category       Category              @relation(fields: [categoryId], references: [id])
-  source         MerchantMappingSource
-  confidence     Float?
-  createdAt      DateTime              @default(now())
-  updatedAt      DateTime              @updatedAt
+  id         String                @id @default(uuid())
+  userId     String
+  merchantId String
+  merchant   Merchant              @relation(fields: [merchantId], references: [id])
+  categoryId String
+  category   Category              @relation(fields: [categoryId], references: [id])
+  source     MerchantMappingSource
+  confidence Float?
+  user       User                  @relation(fields: [userId], references: [id])
 
-  @@unique([userId, normalizedName])
+  @@unique([userId, merchantId])
+  @@index([userId])
+  @@index([merchantId])
+  @@index([categoryId])
+}
+
+model Merchant {
+  id               String            @id @default(uuid())
+  name             String            @unique
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  aliases          MerchantAlias[]
+  transactions     Transaction[]
+  merchantMappings MerchantMapping[]
+}
+
+model MerchantAlias {
+  id         String   @id @default(uuid())
+  alias      String   @unique
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 enum CategoryAssignmentSource {
