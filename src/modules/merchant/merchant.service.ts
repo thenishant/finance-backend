@@ -391,32 +391,19 @@ export const categorizeMerchant = async ({
     /* ---------------------------------------------------------------------- */
     /* Save Mapping                                                           */
     /* ---------------------------------------------------------------------- */
-
-    await prisma.merchantMapping.upsert({
-        where: {
-            userId_merchantId: {
-                userId,
-                merchantId: merchant.id,
-            },
-        },
-        update: {
-            categoryId: category.id,
-            source: MerchantMappingSource.AI,
-            confidence: aiResult.confidence,
-        },
-        create: {
-            userId,
-            merchantId: merchant.id,
-            categoryId: category.id,
-            source: MerchantMappingSource.AI,
-            confidence: aiResult.confidence,
-        },
-    });
-
-    console.info("[Merchant] Mapping learned", {
+    console.info("[Merchant] AI categorized", {
         merchant: merchant.name,
         category: category.name,
+        confidence: aiResult.confidence,
     });
+
+    await learnMerchantCategory(
+        userId,
+        merchant.id,
+        category.id,
+        MerchantMappingSource.AI,
+        aiResult.confidence,
+    );
 
     return {
         merchant,
@@ -424,8 +411,7 @@ export const categorizeMerchant = async ({
         confidence: aiResult.confidence,
         reasoning: aiResult.reasoning,
         fromCache: false,
-        categoryAssignmentSource:
-        CategoryAssignmentSource.AI_EXISTING,
+        categoryAssignmentSource: CategoryAssignmentSource.AI_NEW,
     };
 };
 /* -------------------------------------------------------------------------- */
@@ -436,15 +422,31 @@ export const learnMerchantCategory = async (
     userId: string,
     merchantId: string,
     categoryId: string,
+    source: MerchantMappingSource,
+    confidence = 1,
 ) => {
 
-    const category = await getCategoryById(
-        userId,
-        categoryId,
-    );
+    // Never overwrite USER mappings with AI
+    if (source === MerchantMappingSource.AI) {
+        const existing = await prisma.merchantMapping.findUnique({
+            where: {
+                userId_merchantId: {
+                    userId,
+                    merchantId,
+                },
+            },
+        });
 
-    if (!category) {
-        throw new Error("Category not found.");
+        if (
+            existing &&
+            existing.source === MerchantMappingSource.USER
+        ) {
+            console.info("[Merchant] Preserving USER mapping", {
+                merchantId,
+            });
+
+            return;
+        }
     }
 
     await prisma.merchantMapping.upsert({
@@ -456,17 +458,22 @@ export const learnMerchantCategory = async (
         },
         update: {
             categoryId,
-            source: MerchantMappingSource.USER,
-            confidence: 1,
+            source,
+            confidence,
         },
         create: {
             userId,
             merchantId,
             categoryId,
-            source: MerchantMappingSource.USER,
-            confidence: 1,
+            source,
+            confidence,
         },
     });
 
-    return category;
+    console.info("[Merchant] Mapping learned", {
+        merchantId,
+        categoryId,
+        source,
+        confidence,
+    });
 };

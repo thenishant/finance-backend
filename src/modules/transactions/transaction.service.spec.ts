@@ -449,64 +449,6 @@ describe("transaction.service", () => {
             "Cannot transfer to same account"
         );
     });
-    it("stores merchant and normalized merchant", async () => {
-        const trx = await createTransaction(userId, {
-            type: TransactionType.EXPENSE,
-            amount: 100,
-            date: new Date().toISOString(),
-            merchant: "  Swiggy  ",
-            categoryId,
-            sourceAccountId: bank1Id,
-        });
-
-        const saved = await prisma.transaction.findUnique({
-            where: {
-                id: trx.id,
-            },
-        });
-
-        expect(saved?.merchant).toBe("Swiggy");
-        expect(saved?.merchantNormalized).toBe(
-            normalizeMerchantName("Swiggy")
-        );
-    });
-
-    it("preserves merchant when updating category only", async () => {
-        const trx = await createTransaction(userId, {
-            type: TransactionType.EXPENSE,
-            amount: 100,
-            date: new Date().toISOString(),
-            merchant: "Swiggy",
-            categoryId,
-            sourceAccountId: bank1Id,
-        });
-
-        const newCategory = await prisma.category.create({
-            data: {
-                userId,
-                name: "Dining",
-                type: TransactionType.EXPENSE,
-            },
-        });
-
-        await updateTransaction(userId, trx.id, {
-            type: TransactionType.EXPENSE,
-            amount: 100,
-            date: new Date().toISOString(),
-            categoryId: newCategory.id,
-        });
-
-        const updated = await prisma.transaction.findUnique({
-            where: {
-                id: trx.id,
-            },
-        });
-
-        expect(updated?.merchant).toBe("Swiggy");
-        expect(updated?.merchantNormalized).toBe(
-            normalizeMerchantName("Swiggy")
-        );
-    });
 
     it("preserves accounts when updating note only", async () => {
         const trx = await createTransaction(userId, {

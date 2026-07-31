@@ -1,5 +1,5 @@
 import {prisma} from "../../database/prisma";
-import {CategoryAssignmentSource, Prisma, TransactionType} from "@prisma/client";
+import {CategoryAssignmentSource, MerchantMappingSource, Prisma, TransactionType} from "@prisma/client";
 import {postTransactionToLedger} from "../ledger/ledger.service";
 import {categorizeMerchant, learnMerchantCategory, resolveMerchant} from "../merchant/merchant.service";
 import {needsCategoryReview} from "../merchant/merchant.review";
@@ -316,30 +316,27 @@ export const createTransaction = async (
                 include: transactionInclude,
             });
 
+        if (
+            trx.merchantId &&
+            trx.categoryId &&
+            data.type !== TransactionType.TRANSFER &&
+            trx.categoryAssignmentSource === CategoryAssignmentSource.USER
+        ) {
+            await learnMerchantCategory(
+                userId,
+                trx.merchantId,
+                trx.categoryId,
+                MerchantMappingSource.USER,
+            );
+        }
+
         /* ------------------------------------------------------------------ */
         /* Ledger + Analytics                                                 */
         /* ------------------------------------------------------------------ */
 
-        await postTransactionToLedger(
-            tx,
-            userId,
-            trx,
-            amount,
-        );
-
-        await updateAnalytics(
-            tx,
-            userId,
-            year,
-            month,
-            data.type,
-            amount,
-            "increment",
-        );
-
-        return serialize(
-            mapTransaction(trx),
-        );
+        await postTransactionToLedger(tx, userId, trx, amount);
+        await updateAnalytics(tx, userId, year, month, data.type, amount, "increment");
+        return serialize(mapTransaction(trx),);
     });
 };
 
@@ -360,9 +357,7 @@ export const deleteTransaction = async (
             );
 
         if (!trx) {
-            throw new Error(
-                "Transaction not found"
-            );
+            throw new Error("Transaction not found");
         }
 
         await tx.ledgerEntry.deleteMany({
@@ -371,15 +366,7 @@ export const deleteTransaction = async (
             },
         });
 
-        await updateAnalytics(
-            tx,
-            userId,
-            trx.year,
-            trx.month,
-            trx.type,
-            trx.amount,
-            "decrement"
-        );
+        await updateAnalytics(tx, userId, trx.year, trx.month, trx.type, trx.amount, "decrement");
 
         const deleted = await tx.transaction.update({
             where: {
@@ -391,9 +378,7 @@ export const deleteTransaction = async (
             include: transactionInclude,
         });
 
-        return serialize(
-            mapTransaction(deleted)
-        );
+        return serialize(mapTransaction(deleted));
     });
 };
 
@@ -416,9 +401,7 @@ export const restoreTransaction = async (
             );
 
         if (!trx) {
-            throw new Error(
-                "Transaction not found"
-            );
+            throw new Error("Transaction not found");
         }
 
         const restored = await tx.transaction.update({
@@ -636,20 +619,13 @@ export const updateTransaction = async (
                 const resolvedMerchant =
                     await resolveMerchant(merchantRaw);
 
-                const newMerchantId =
-                    resolvedMerchant.merchant.id;
-
-                const merchantChanged =
-                    newMerchantId !== existing.merchantId;
-
+                const newMerchantId = resolvedMerchant.merchant.id;
+                const merchantChanged = newMerchantId !== existing.merchantId;
                 merchantId = newMerchantId;
-
                 const shouldRecategorize =
                     merchantChanged &&
                     !data.categoryId &&
-                    existing.categoryAssignmentSource !==
-                    CategoryAssignmentSource.USER;
-
+                    existing.categoryAssignmentSource !== CategoryAssignmentSource.USER;
                 if (shouldRecategorize) {
                     const result =
                         await categorizeMerchant({
@@ -666,6 +642,13 @@ export const updateTransaction = async (
                 }
             } else {
                 merchantId = null;
+
+                if (!data.categoryId) {
+                    categoryAssignmentSource =
+                        CategoryAssignmentSource.USER;
+
+                    aiCategoryConfidence = null;
+                }
             }
         }
 
@@ -751,21 +734,26 @@ export const updateTransaction = async (
            LEARN MERCHANT
         ============================== */
 
+        const merchantChanged =
+            updated.merchantId !== existing.merchantId;
+
         const categoryChanged =
             updated.categoryId !== existing.categoryId;
 
-        const merchantChanged = updated.merchantId !== existing.merchantId;
-
         if (
-            data.updateMerchantMapping &&
             updated.merchantId &&
             updated.categoryId &&
-            (categoryChanged || merchantChanged)
+            updated.categoryAssignmentSource === CategoryAssignmentSource.USER &&
+            data.type !== TransactionType.TRANSFER &&
+            (merchantChanged || categoryChanged)
         ) {
             await learnMerchantCategory(
                 userId,
                 updated.merchantId,
                 updated.categoryId,
+                updated.categoryAssignmentSource === CategoryAssignmentSource.USER
+                    ? MerchantMappingSource.USER
+                    : MerchantMappingSource.AI
             );
         }
 

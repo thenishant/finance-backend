@@ -8,21 +8,20 @@ datasource db {
 }
 
 model User {
-  id               String             @id @default(uuid())
-  email            String             @unique
-  passwordHash     String?
-  authProvider     AuthProvider       @default(EMAIL)
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
-  categories       Category[]
-  transactions     Transaction[]
-  investmentGoals  InvestmentGoal[]
-  monthlyAnalytics MonthlyAnalytics[]
-  ledgerEntries    LedgerEntry[]
-
-  gmailAccount      GmailAccount?
+  id                String             @id @default(uuid())
+  email             String             @unique
+  passwordHash      String?
+  authProvider      AuthProvider       @default(EMAIL)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  categories        Category[]
   financialAccounts FinancialAccount[]
+  gmailAccount      GmailAccount?
+  investmentGoals   InvestmentGoal[]
+  ledgerEntries     LedgerEntry[]
   merchantMappings  MerchantMapping[]
+  monthlyAnalytics  MonthlyAnalytics[]
+  transactions      Transaction[]
 }
 
 model Category {
@@ -33,11 +32,11 @@ model Category {
   parentId         String?
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
-  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   parent           Category?         @relation("CategoryTree", fields: [parentId], references: [id])
   children         Category[]        @relation("CategoryTree")
-  transactions     Transaction[]
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   merchantMappings MerchantMapping[]
+  transactions     Transaction[]
 
   @@unique([userId, parentId, name])
   @@index([userId])
@@ -47,39 +46,40 @@ model Category {
 model Transaction {
   id                       String                   @id @default(uuid())
   userId                   String
-  user                     User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
   type                     TransactionType
   amount                   Decimal                  @db.Decimal(18, 2)
-  originalAmount           Decimal?                 @db.Decimal(18, 2)
   date                     DateTime
   year                     Int
   month                    Int
-  note                     String?
   categoryId               String?
-  category                 Category?                @relation(fields: [categoryId], references: [id])
-  sourceAccountId          String?
-  destinationAccountId     String?
-  sourceAccount            FinancialAccount?        @relation("SourceAccount", fields: [sourceAccountId], references: [id])
-  destinationAccount       FinancialAccount?        @relation("DestinationAccount", fields: [destinationAccountId], references: [id])
-  source                   TransactionSource        @default(MANUAL)
-  externalReference        String?
-  fingerprint              String?                  @unique
-  gmailMessageId           String?
-  gmailMessage             GmailMessage?            @relation(fields: [gmailMessageId], references: [id])
+  note                     String?
   idempotencyKey           String?                  @unique
   metadata                 Json?
   createdAt                DateTime                 @default(now())
   updatedAt                DateTime                 @updatedAt
   deletedAt                DateTime?
-  ledgerEntries            LedgerEntry[]
-  status                   TransactionStatus        @default(COMPLETED)
+  externalReference        String?
+  fingerprint              String?                  @unique
+  gmailMessageId           String?
+  source                   TransactionSource        @default(MANUAL)
+  destinationAccountId     String?
+  sourceAccountId          String?
   currency                 String                   @default("INR")
   exchangeRate             Decimal?                 @db.Decimal(18, 6)
+  merchantNormalized       String?
+  originalAmount           Decimal?                 @db.Decimal(18, 2)
+  status                   TransactionStatus        @default(COMPLETED)
   categoryAssignmentSource CategoryAssignmentSource @default(USER)
   aiCategoryConfidence     Float?
   merchantId               String?
-  merchant                 Merchant?                @relation(fields: [merchantId], references: [id])
   merchantRaw              String?
+  ledgerEntries            LedgerEntry[]
+  category                 Category?                @relation(fields: [categoryId], references: [id])
+  destinationAccount       FinancialAccount?        @relation("DestinationAccount", fields: [destinationAccountId], references: [id])
+  gmailMessage             GmailMessage?            @relation(fields: [gmailMessageId], references: [id])
+  merchant                 Merchant?                @relation(fields: [merchantId], references: [id])
+  sourceAccount            FinancialAccount?        @relation("SourceAccount", fields: [sourceAccountId], references: [id])
+  user                     User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([date])
@@ -90,18 +90,19 @@ model Transaction {
   @@index([sourceAccountId])
   @@index([destinationAccountId])
   @@index([gmailMessageId])
+  @@index([userId, merchantNormalized])
 }
 
 model LedgerEntry {
   id                 String           @id @default(uuid())
   userId             String
-  financialAccountId String
   transactionId      String?
   amount             Decimal          @db.Decimal(18, 2)
   createdAt          DateTime         @default(now())
-  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  financialAccountId String
   financialAccount   FinancialAccount @relation(fields: [financialAccountId], references: [id])
   transaction        Transaction?     @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([financialAccountId])
   @@index([transactionId])
@@ -138,7 +139,6 @@ model MonthlyAnalytics {
 model GmailAccount {
   id           String         @id @default(uuid())
   userId       String         @unique
-  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   email        String         @unique
   refreshToken String
   accessToken  String?
@@ -146,22 +146,23 @@ model GmailAccount {
   lastSyncAt   DateTime?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
-  messages     GmailMessage[]
   historyId    String?
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages     GmailMessage[]
 }
 
 model GmailMessage {
   id             String        @id @default(uuid())
   gmailMessageId String        @unique
   gmailAccountId String
-  gmailAccount   GmailAccount  @relation(fields: [gmailAccountId], references: [id], onDelete: Cascade)
   sender         String?
   subject        String?
   body           String
   processed      Boolean       @default(false)
   createdAt      DateTime      @default(now())
-  transactions   Transaction[]
   receivedAt     DateTime?
+  gmailAccount   GmailAccount  @relation(fields: [gmailAccountId], references: [id], onDelete: Cascade)
+  transactions   Transaction[]
 
   @@index([gmailAccountId])
   @@index([processed])
@@ -180,16 +181,16 @@ model FinancialAccount {
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
   deletedAt            DateTime?
-  isArchived           Boolean              @default(false)
-  user                 User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  outgoingTransactions Transaction[]        @relation("SourceAccount")
-  incomingTransactions Transaction[]        @relation("DestinationAccount")
-  ledgerEntries        LedgerEntry[]
-  nickname             String?
   emailMatchers        Json?
   externalReference    String?
   institutionName      String?
+  isArchived           Boolean              @default(false)
+  nickname             String?
   sortOrder            Int                  @default(0)
+  user                 User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledgerEntries        LedgerEntry[]
+  incomingTransactions Transaction[]        @relation("DestinationAccount")
+  outgoingTransactions Transaction[]        @relation("SourceAccount")
 
   @@index([userId, isArchived])
   @@index([userId, name])
@@ -201,18 +202,18 @@ model FinancialAccount {
 model MerchantMapping {
   id         String                @id @default(uuid())
   userId     String
-  merchantId String
-  merchant   Merchant              @relation(fields: [merchantId], references: [id])
   categoryId String
-  category   Category              @relation(fields: [categoryId], references: [id])
   source     MerchantMappingSource
   confidence Float?
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
+  merchantId String
+  category   Category              @relation(fields: [categoryId], references: [id])
+  merchant   Merchant              @relation(fields: [merchantId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   user       User                  @relation(fields: [userId], references: [id])
 
   @@unique([userId, merchantId])
-  @@index([userId])
   @@index([merchantId])
-  @@index([categoryId])
 }
 
 model Merchant {
@@ -221,22 +222,23 @@ model Merchant {
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
   aliases          MerchantAlias[]
-  transactions     Transaction[]
   merchantMappings MerchantMapping[]
+  transactions     Transaction[]
 }
 
 model MerchantAlias {
   id         String   @id @default(uuid())
   alias      String   @unique
   merchantId String
-  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
 }
 
 enum CategoryAssignmentSource {
   USER
   AI_EXISTING
+  AI_NEW
 }
 
 enum MerchantMappingSource {
