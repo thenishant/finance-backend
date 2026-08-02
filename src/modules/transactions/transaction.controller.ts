@@ -50,8 +50,9 @@ export const getRecentTransactions = async (req: Request, res: Response, next: N
 
 export const getAllTransactions = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const transactions = await transactionService.getTransactions(getUserId(req));
-
+        const sortBy = req.query.sortBy === "createdAt" ? "createdAt" : "date";
+        const order = req.query.order === "asc" ? "asc" : "desc";
+        const transactions = await transactionService.getTransactions(getUserId(req), sortBy, order,);
         return res.json({
             success: true, data: transactions,
         });

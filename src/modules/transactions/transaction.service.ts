@@ -5,10 +5,13 @@ import {
     findIdempotentTransaction,
     getDeletedTransaction,
     getExistingTransaction,
+    getTransactionOrderBy,
     learnUserMerchantMapping,
     removeTransactionEffects,
     resolveNewTransactionMerchant,
     resolveTransactionUpdate,
+    SortOrder,
+    TransactionSortBy,
     validateTransactionAccounts,
     validateTransactionBasics,
     validateTransactionCategory
@@ -239,15 +242,15 @@ export const restoreTransaction = async (
 export const getRecentTransactions = async (
     userId: string,
     limit = 5,
+    sortBy: TransactionSortBy = "date",
+    order: SortOrder = "desc",
 ) => {
 
     const transactions =
         await prisma.transaction.findMany({
             where: activeTransactionWhere(userId),
             include: transactionInclude,
-            orderBy: {
-                date: "desc",
-            },
+            orderBy: getTransactionOrderBy(sortBy, order,),
             take: limit,
         });
 
@@ -258,20 +261,17 @@ export const getRecentTransactions = async (
 
 export const getTransactions = async (
     userId: string,
+    sortBy: TransactionSortBy = "date",
+    order: SortOrder = "desc",
 ) => {
-
     const transactions =
         await prisma.transaction.findMany({
             where: activeTransactionWhere(userId),
             include: transactionInclude,
-            orderBy: {
-                date: "desc",
-            },
+            orderBy: getTransactionOrderBy(sortBy, order,),
         });
 
-    return serialize(
-        transactions.map(mapTransaction),
-    );
+    return serialize(transactions.map(mapTransaction),);
 };
 
 export const getTransactionById = async (
