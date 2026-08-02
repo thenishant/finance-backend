@@ -61,3 +61,13 @@ export interface CategorizeMerchantInput {
     merchant: Merchant;
     transactionType: TransactionType;
 }
+
+export interface ResolveTransactionMerchantResult {
+    merchant: Merchant | null;
+    merchantId: string | null;
+    merchantRaw: string | null;
+    category: Category | null;
+    categoryId: string | null;
+    categoryAssignmentSource: CategoryAssignmentSource;
+    confidence: number | null;
+}

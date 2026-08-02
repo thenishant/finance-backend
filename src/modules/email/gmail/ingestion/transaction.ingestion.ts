@@ -1,19 +1,13 @@
 import {createHash} from "node:crypto";
 
-import {
-    CategoryAssignmentSource,
-    FinancialAccountType,
-    Prisma,
-    TransactionSource,
-    TransactionType,
-} from "@prisma/client";
+import {FinancialAccountType, Prisma, TransactionSource, TransactionType,} from "@prisma/client";
 
 import {prisma} from "../../../../database/prisma";
 import {postTransactionToLedger} from "../../../ledger/ledger.service";
-import {categorizeMerchant, resolveMerchant} from "../../../merchant/merchant.service";
 import {updateAnalytics} from "../../../transactions/transaction.service";
 import {BankProvider, detectBankProvider} from "../detector/bank.detector";
 import {parseEmail} from "../parsers/parser.factory";
+import {resolveTransactionMerchant} from "../../../merchant/merchant.service";
 
 export interface GmailEmailForIngestion {
     userId: string;
@@ -38,40 +32,30 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion,
         email.body,
     );
 
-    let merchantId: string | null = null;
-    let merchantRaw: string | null = null;
-
-    let categoryId: string | null = null;
-    let categoryAssignmentSource: CategoryAssignmentSource = CategoryAssignmentSource.USER;
-    let aiCategoryConfidence: number | null = null;
-
     if (!parsed) {
         return {status: "not-a-transaction" as const,};
     }
 
-    if (parsed.merchant && parsed.type !== TransactionType.TRANSFER) {
-        try {
-            merchantRaw = parsed.merchant.trim();
-            const resolvedMerchant = await resolveMerchant(merchantRaw);
-            merchantId = resolvedMerchant.merchant.id;
-            const categorization =
-                await categorizeMerchant({
-                    userId: email.userId,
-                    merchant: resolvedMerchant.merchant,
-                    transactionType: parsed.type,
-                });
-            categoryId = categorization.category.id;
-            categoryAssignmentSource = categorization.categoryAssignmentSource;
-            aiCategoryConfidence = categorization.confidence;
-        } catch (error) {
-            console.error("Merchant categorization failed", {
-                    merchant: parsed.merchant,
-                    provider,
-                },
-                error,
-            );
-        }
-    }
+    console.info("[Ingest] Processing 1", {
+        gmailMessageId: email.gmailMessageId,
+        subject: email.subject,
+    });
+
+    const shouldCategorizeMerchant =
+        parsed.type === TransactionType.EXPENSE ||
+        (
+            parsed.type === TransactionType.INCOME &&
+            parsed.merchant?.trim().startsWith("UPI/")
+        );
+
+    const merchant =
+        await resolveTransactionMerchant({
+            userId: email.userId,
+            merchantRaw: parsed.merchant,
+            transactionType: parsed.type,
+            shouldCategorize: shouldCategorizeMerchant,
+        });
+
     const date =
         parsed.transactionDate ??
         email.receivedAt ??
@@ -123,11 +107,11 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion,
                         date,
                         year: date.getFullYear(),
                         month: date.getMonth() + 1,
-                        merchantId,
-                        merchantRaw,
-                        categoryId,
-                        categoryAssignmentSource,
-                        aiCategoryConfidence,
+                        merchantId: merchant.merchantId,
+                        merchantRaw: merchant.merchantRaw,
+                        categoryId: merchant.categoryId,
+                        categoryAssignmentSource: merchant.categoryAssignmentSource,
+                        aiCategoryConfidence: merchant.confidence,
                         source: TransactionSource.GMAIL,
                         sourceAccountId: sourceAccount?.id ?? null,
                         fingerprint,
@@ -159,16 +143,18 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion,
                 amount,
                 "increment",
             );
-
+            console.info("[Ingest] Processing 2", {
+                gmailMessageId: email.gmailMessageId,
+                subject: email.subject,
+            });
             return {
                 status: "created" as const,
                 transactionId: transaction.id,
             };
         });
     } catch (error) {
-
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-            return {status: "duplicate" as const,};
+        if (error instanceof Prisma.PrismaClientKnownRequestError) {
+            console.error("P2002", error.meta);
         }
         throw error;
     }

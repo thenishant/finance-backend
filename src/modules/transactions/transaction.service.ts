@@ -1,44 +1,26 @@
 import {prisma} from "../../database/prisma";
-import {CategoryAssignmentSource, MerchantMappingSource, Prisma, TransactionType} from "@prisma/client";
-import {postTransactionToLedger} from "../ledger/ledger.service";
-import {categorizeMerchant, learnMerchantCategory, resolveMerchant} from "../merchant/merchant.service";
-import {needsCategoryReview} from "../merchant/merchant.review";
+import {CategoryAssignmentSource, Prisma, TransactionType} from "@prisma/client";
+import {
+    applyTransactionEffects,
+    findIdempotentTransaction,
+    getDeletedTransaction,
+    getExistingTransaction,
+    learnUserMerchantMapping,
+    removeTransactionEffects,
+    resolveNewTransactionMerchant,
+    resolveTransactionUpdate,
+    validateTransactionAccounts,
+    validateTransactionBasics,
+    validateTransactionCategory
+} from "./transactions.utils";
+import {transactionInclude} from "./transaction.constants";
+import {serialize} from "../../shared/utils/prisma.utils";
+import {mapTransaction} from "./transaction.mapper";
 
-const serialize = <T>(obj: T): T =>
-    JSON.parse(
-        JSON.stringify(obj, (_, v) =>
-            v instanceof Prisma.Decimal ? v.toString() : v
-        )
-    ) as T;
-const mapTransaction = <
-    T extends {
-        categoryAssignmentSource: CategoryAssignmentSource;
-        aiCategoryConfidence: number | null;
-        merchant?: {
-            id: string;
-            name: string;
-        } | null;
-        category?: {
-            name: string;
-        } | null;
-    }
->(
-    trx: T,
-) => ({
-    ...trx,
-    needsCategoryReview: needsCategoryReview({
-        assignmentSource: trx.categoryAssignmentSource,
-        confidence: trx.aiCategoryConfidence,
-        categoryName: trx.category?.name,
-    }),
+const activeTransactionWhere = (userId: string) => ({
+    userId,
+    deletedAt: null,
 });
-
-const transactionInclude = {
-    category: true,
-    merchant: true,
-    sourceAccount: true,
-    destinationAccount: true,
-} satisfies Prisma.TransactionInclude;
 
 export const updateAnalytics = async (
     tx: Prisma.TransactionClient,
@@ -49,24 +31,30 @@ export const updateAnalytics = async (
     amount: Prisma.Decimal,
     op: "increment" | "decrement"
 ) => {
-    if (type === TransactionType.TRANSFER) return;
+    const analyticsField = {
+        [TransactionType.INCOME]: "totalIncome",
+        [TransactionType.EXPENSE]: "totalExpense",
+        [TransactionType.INVESTMENT]: "totalInvestment",
+    } as const;
 
-    const updateData: Prisma.MonthlyAnalyticsUpdateInput = {};
-
-    if (type === TransactionType.INCOME) {
-        updateData.totalIncome = {[op]: amount};
-    } else if (type === TransactionType.EXPENSE) {
-        updateData.totalExpense = {[op]: amount};
-    } else if (type === TransactionType.INVESTMENT) {
-        updateData.totalInvestment = {[op]: amount};
+    switch (type) {
+        case TransactionType.TRANSFER:
+            return;
     }
 
+    const field = analyticsField[type];
+    if (!field) {
+        return;
+    }
     await tx.monthlyAnalytics.upsert({
         where: {
             userId_year_month: {userId, year, month,},
         },
-        update: updateData,
-        create: {
+        update: {
+            [field]: {
+                [op]: amount
+            }
+        }, create: {
             userId, year, month,
             totalIncome: type === TransactionType.INCOME ? amount : new Prisma.Decimal(0),
             totalExpense: type === TransactionType.EXPENSE ? amount : new Prisma.Decimal(0),
@@ -74,6 +62,7 @@ export const updateAnalytics = async (
         },
     });
 };
+
 
 export const createTransaction = async (
     userId: string,
@@ -90,383 +79,190 @@ export const createTransaction = async (
     },
 ) => {
     return prisma.$transaction(async tx => {
-        if (!data.type) {
-            throw new Error("Transaction type required");
-        }
+        const {amount, date, year, month,} = validateTransactionBasics({amount: data.amount, date: data.date,});
 
-        const amount = new Prisma.Decimal(data.amount);
-
-        if (amount.lte(0)) {
-            throw new Error("Amount must be > 0");
-        }
-
-        const date = new Date(data.date);
-
-        if (isNaN(date.getTime())) {
-            throw new Error("Invalid date");
-        }
-
-        const year = date.getFullYear();
-        const month = date.getMonth() + 1;
-
-        /* ------------------------------------------------------------------ */
-        /* Idempotency                                                        */
-        /* ------------------------------------------------------------------ */
-
-        if (data.idempotencyKey) {
-            const existing = await tx.transaction.findUnique({
-                where: {
-                    idempotencyKey: data.idempotencyKey,
-                },
-            });
-
-            if (existing) {
-                const transaction = await tx.transaction.findUnique({
-                    where: {
-                        id: existing.id,
-                    },
-                    include: transactionInclude,
-                });
-
-                if (!transaction) {
-                    throw new Error("Transaction not found");
-                }
-
-                return serialize(mapTransaction(transaction));
-            }
-        }
-
-        /* ------------------------------------------------------------------ */
-        /* Accounts                                                           */
-        /* ------------------------------------------------------------------ */
-
-        const findAccount = (accountId?: string) =>
-            accountId
-                ? tx.financialAccount.findFirst({
-                    where: {
-                        id: accountId,
-                        userId,
-                        deletedAt: null,
-                        isArchived: false,
-                    },
-                })
-                : Promise.resolve(null);
-
-        const fromAccount = await findAccount(
-            data.sourceAccountId,
-        );
-
-        const toAccount = await findAccount(
-            data.destinationAccountId,
-        );
-
-        if (
-            data.type === TransactionType.INCOME &&
-            !toAccount
-        ) {
-            throw new Error(
-                "Invalid destination account",
-            );
-        }
-
-        if (
-            (
-                data.type ===
-                TransactionType.EXPENSE ||
-                data.type ===
-                TransactionType.INVESTMENT
-            ) &&
-            !fromAccount
-        ) {
-            throw new Error(
-                "Invalid source account",
-            );
-        }
-
-        if (data.type === TransactionType.TRANSFER) {
-            if (!fromAccount || !toAccount) {
-                throw new Error(
-                    "Both accounts are required",
-                );
-            }
-
-            if (fromAccount.id === toAccount.id) {
-                throw new Error(
-                    "Cannot transfer to same account",
-                );
-            }
-        }
-
-        /* ------------------------------------------------------------------ */
-        /* Merchant + Category                                                */
-        /* ------------------------------------------------------------------ */
-
-        let merchantId: string | null = null;
-        let merchantRaw: string | null = null;
-
-        let categoryId: string | null = data.categoryId ?? null;
-        let categoryAssignmentSource: CategoryAssignmentSource =
-            CategoryAssignmentSource.USER;
-        let aiCategoryConfidence: number | null = null;
-
-        if (data.merchant?.trim()) {
-            merchantRaw = data.merchant.trim();
-
-            const resolvedMerchant =
-                await resolveMerchant(merchantRaw);
-
-            merchantId = resolvedMerchant.merchant.id;
-
-            if (
-                data.type !== TransactionType.TRANSFER &&
-                !categoryId
-            ) {
-                const categorization =
-                    await categorizeMerchant({
-                        userId,
-                        merchant: resolvedMerchant.merchant,
-                        transactionType: data.type,
-                    });
-
-                categoryId = categorization.category.id;
-                categoryAssignmentSource =
-                    categorization.categoryAssignmentSource;
-                aiCategoryConfidence =
-                    categorization.confidence;
-            }
-        }
-
-        if (
-            data.type !== TransactionType.TRANSFER &&
-            !categoryId
-        ) {
-            throw new Error(
-                "Either categoryId or merchant is required.",
-            );
-        }
-
-        if (categoryId) {
-            const category = await tx.category.findFirst({
-                where: {
-                    id: categoryId,
-                    userId,
-                },
-            });
-
-            if (!category) {
-                throw new Error("Invalid categoryId");
-            }
-
-            if (
-                data.type !== TransactionType.TRANSFER &&
-                category.type !== data.type
-            ) {
-                throw new Error(
-                    "Category type does not match transaction type",
-                );
-            }
-        }
-
-        /* ------------------------------------------------------------------ */
-        /* Create Transaction                                                 */
-        /* ------------------------------------------------------------------ */
-
-        const trx =
-            await tx.transaction.create({
-                data: {
-                    userId,
-                    type: data.type,
-                    amount,
-                    date,
-                    year,
-                    month,
-
-                    categoryId:
-                        data.type ===
-                        TransactionType.TRANSFER
-                            ? null
-                            : categoryId,
-
-                    categoryAssignmentSource:
-                        data.type ===
-                        TransactionType.TRANSFER
-                            ? CategoryAssignmentSource.USER
-                            : categoryAssignmentSource,
-
-                    aiCategoryConfidence,
-
-                    merchantId,
-                    merchantRaw,
-
-                    sourceAccountId:
-                        data.sourceAccountId ??
-                        null,
-
-                    destinationAccountId:
-                        data.destinationAccountId ??
-                        null,
-
-                    note:
-                        data.note ?? null,
-
-                    idempotencyKey:
-                        data.idempotencyKey ??
-                        null,
-                },
-                include: transactionInclude,
-            });
-
-        if (
-            trx.merchantId &&
-            trx.categoryId &&
-            data.type !== TransactionType.TRANSFER &&
-            trx.categoryAssignmentSource === CategoryAssignmentSource.USER
-        ) {
-            await learnMerchantCategory(
-                userId,
-                trx.merchantId,
-                trx.categoryId,
-                MerchantMappingSource.USER,
-            );
-        }
-
-        /* ------------------------------------------------------------------ */
-        /* Ledger + Analytics                                                 */
-        /* ------------------------------------------------------------------ */
-
-        await postTransactionToLedger(tx, userId, trx, amount);
-        await updateAnalytics(tx, userId, year, month, data.type, amount, "increment");
-        return serialize(mapTransaction(trx),);
-    });
-};
-
-export const deleteTransaction = async (
-    userId: string,
-    transactionId: string
-) => {
-    return prisma.$transaction(async tx => {
-        const trx =
-            await tx.transaction.findFirst(
-                {
-                    where: {
-                        id: transactionId,
-                        userId,
-                        deletedAt: null,
-                    },
-                }
-            );
-
-        if (!trx) {
-            throw new Error("Transaction not found");
-        }
-
-        await tx.ledgerEntry.deleteMany({
-            where: {
-                transactionId: trx.id,
-            },
+        const existing = await findIdempotentTransaction({
+            tx,
+            idempotencyKey: data.idempotencyKey,
+            include: transactionInclude,
         });
 
-        await updateAnalytics(tx, userId, trx.year, trx.month, trx.type, trx.amount, "decrement");
+        if (existing) {
+            return serialize(
+                mapTransaction(existing),
+            );
+        }
 
-        const deleted = await tx.transaction.update({
-            where: {
-                id: trx.id,
-            },
+        const {sourceAccountId, destinationAccountId,} = await validateTransactionAccounts({
+            tx,
+            userId,
+            type: data.type,
+            sourceAccountId:
+            data.sourceAccountId,
+            destinationAccountId:
+            data.destinationAccountId,
+        });
+
+        const merchant = await resolveNewTransactionMerchant({
+            userId,
+            merchantRaw: data.merchant,
+            transactionType: data.type,
+            categoryId: data.categoryId,
+        });
+
+        const categoryId = data.categoryId ?? merchant.categoryId;
+        const categoryAssignmentSource = data.categoryId ? CategoryAssignmentSource.USER : merchant.categoryAssignmentSource;
+        const aiCategoryConfidence = data.categoryId ? null : merchant.confidence;
+        await validateTransactionCategory({tx, userId, type: data.type, categoryId,});
+        const transaction = await tx.transaction.create({
             data: {
-                deletedAt: new Date(),
+                userId,
+                type: data.type,
+                amount,
+                date,
+                year,
+                month,
+
+                merchantId: merchant.merchantId,
+                merchantRaw: merchant.merchantRaw,
+
+                categoryId:
+                    data.type === TransactionType.TRANSFER
+                        ? null
+                        : categoryId,
+
+                categoryAssignmentSource:
+                    data.type === TransactionType.TRANSFER
+                        ? CategoryAssignmentSource.USER
+                        : categoryAssignmentSource,
+
+                aiCategoryConfidence,
+
+                sourceAccountId,
+                destinationAccountId,
+
+                note: data.note ?? null,
+                idempotencyKey: data.idempotencyKey ?? null,
             },
             include: transactionInclude,
         });
 
-        return serialize(mapTransaction(deleted));
+        console.info("[Transaction] Created", {
+            id: transaction.id,
+            amount: transaction.amount.toString(),
+            fingerPrint: transaction.fingerprint,
+            gmailMessageId: transaction.gmailMessageId,
+        });
+
+        await learnUserMerchantMapping({userId, transaction, transactionType: data.type,});
+        await applyTransactionEffects({tx, userId, transaction, amount,});
+        return serialize(mapTransaction(transaction),
+        );
+    })
+        ;
+};
+
+export const deleteTransaction = async (
+    userId: string,
+    transactionId: string,
+) => {
+    return prisma.$transaction(async tx => {
+
+        const transaction =
+            await getExistingTransaction({
+                tx,
+                userId,
+                transactionId,
+            });
+
+        await removeTransactionEffects({
+            tx,
+            userId,
+            transaction,
+        });
+
+        const deleted =
+            await tx.transaction.update({
+                where: {
+                    id: transaction.id,
+                },
+                data: {
+                    deletedAt: new Date(),
+                },
+                include: transactionInclude,
+            });
+
+        return serialize(
+            mapTransaction(deleted),
+        );
     });
 };
 
 export const restoreTransaction = async (
     userId: string,
-    transactionId: string
+    transactionId: string,
 ) => {
+
     return prisma.$transaction(async tx => {
-        const trx =
-            await tx.transaction.findFirst(
-                {
-                    where: {
-                        id: transactionId,
-                        userId,
-                        deletedAt: {
-                            not: null,
-                        },
-                    },
-                }
-            );
 
-        if (!trx) {
-            throw new Error("Transaction not found");
-        }
+        const transaction =
+            await getDeletedTransaction({
+                tx,
+                userId,
+                transactionId,
+            });
 
-        const restored = await tx.transaction.update({
-            where: {
-                id: trx.id,
-            },
-            data: {
-                deletedAt: null,
-            },
-            include: transactionInclude,
+        const restored =
+            await tx.transaction.update({
+                where: {
+                    id: transaction.id,
+                },
+                data: {
+                    deletedAt: null,
+                },
+                include: transactionInclude,
+            });
+
+        await applyTransactionEffects({
+            tx,
+            userId,
+            transaction: restored,
+            amount: restored.amount,
         });
 
-        await postTransactionToLedger(
-            tx,
-            userId,
-            trx,
-            trx.amount
-        );
-
-        await updateAnalytics(
-            tx,
-            userId,
-            trx.year,
-            trx.month,
-            trx.type,
-            trx.amount,
-            "increment"
-        );
-
         return serialize(
-            mapTransaction(restored)
+            mapTransaction(restored),
         );
     });
 };
 
 export const getRecentTransactions = async (
     userId: string,
-    limit = 5
+    limit = 5,
 ) => {
-    const trx = await prisma.transaction.findMany({
-        where: {
-            userId,
-            deletedAt: null,
-        },
-        include: transactionInclude,
-        orderBy: {
-            date: "desc",
-        },
-        take: limit,
-    });
+
+    const transactions =
+        await prisma.transaction.findMany({
+            where: activeTransactionWhere(userId),
+            include: transactionInclude,
+            orderBy: {
+                date: "desc",
+            },
+            take: limit,
+        });
 
     return serialize(
-        trx.map(mapTransaction)
+        transactions.map(mapTransaction),
     );
 };
 
 export const getTransactions = async (
-    userId: string
+    userId: string,
 ) => {
-    const trx =
+
+    const transactions =
         await prisma.transaction.findMany({
-            where: {
-                userId,
-                deletedAt: null,
-            },
+            where: activeTransactionWhere(userId),
             include: transactionInclude,
             orderBy: {
                 date: "desc",
@@ -474,26 +270,32 @@ export const getTransactions = async (
         });
 
     return serialize(
-        trx.map(mapTransaction)
+        transactions.map(mapTransaction),
     );
 };
 
-export const getTransactionById = async (userId: string, transactionId: string) => {
-    const trx = await prisma.transaction.findFirst({
-        where: {
-            id: transactionId,
-            userId,
-            deletedAt: null,
-        },
-        include: transactionInclude,
-    });
+export const getTransactionById = async (
+    userId: string,
+    transactionId: string,
+) => {
 
-    if (!trx) throw new Error("Transaction not found");
+    const transaction =
+        await prisma.transaction.findFirst({
+            where: {
+                id: transactionId,
+                ...activeTransactionWhere(userId),
+            },
+            include: transactionInclude,
+        });
+
+    if (!transaction) {
+        throw new Error("Transaction not found");
+    }
+
     return serialize(
-        mapTransaction(trx)
+        mapTransaction(transaction),
     );
 };
-
 export const updateTransaction = async (
     userId: string,
     transactionId: string,
@@ -507,208 +309,46 @@ export const updateTransaction = async (
         destinationAccountId?: string;
         updateMerchantMapping?: boolean;
         note?: string;
-    }
+    },
 ) => {
     return prisma.$transaction(async tx => {
 
-        const existing = await tx.transaction.findFirst({
-            where: {
-                id: transactionId,
+        const existing =
+            await getExistingTransaction({
+                tx,
                 userId,
-                deletedAt: null,
-            },
-        });
-
-        if (!existing) {
-            throw new Error("Transaction not found");
-        }
-
-        if (!data.type) {
-            throw new Error("Transaction type required");
-        }
-
-        const amount = new Prisma.Decimal(data.amount);
-
-        if (amount.lte(0)) {
-            throw new Error("Amount must be > 0");
-        }
-
-        const date = new Date(data.date);
-
-        if (isNaN(date.getTime())) {
-            throw new Error("Invalid date");
-        }
-
-        const year = date.getFullYear();
-        const month = date.getMonth() + 1;
-
-        /* =============================
-           ACCOUNT VALIDATION
-        ============================== */
-
-        const sourceAccountId =
-            data.sourceAccountId ?? existing.sourceAccountId;
-
-        const destinationAccountId =
-            data.destinationAccountId ??
-            existing.destinationAccountId;
-
-        const findAccount = (accountId?: string | null) =>
-            accountId
-                ? tx.financialAccount.findFirst({
-                    where: {
-                        id: accountId,
-                        userId,
-                        deletedAt: null,
-                        isArchived: false,
-                    },
-                })
-                : Promise.resolve(null);
-
-        const fromAccount = await findAccount(sourceAccountId);
-        const toAccount = await findAccount(destinationAccountId);
-
-        if (data.type === TransactionType.INCOME && !toAccount) {
-            throw new Error("Invalid destination account");
-        }
-
-        if (
-            (
-                data.type === TransactionType.EXPENSE ||
-                data.type === TransactionType.INVESTMENT
-            ) &&
-            !fromAccount
-        ) {
-            throw new Error("Invalid source account");
-        }
-
-        if (data.type === TransactionType.TRANSFER) {
-            if (!fromAccount || !toAccount) {
-                throw new Error("Both accounts are required");
-            }
-
-            if (fromAccount.id === toAccount.id) {
-                throw new Error("Cannot transfer to same account");
-            }
-        }
-
-        /* =============================
-   CATEGORY VALIDATION
-============================= */
-
-        if (data.type === TransactionType.TRANSFER && data.categoryId) {
-            throw new Error("Transfers cannot have categories");
-        }
-
-        let categoryId: string | null =
-            data.categoryId ?? existing.categoryId;
-
-        let categoryAssignmentSource: CategoryAssignmentSource =
-            existing.categoryAssignmentSource;
-
-        let aiCategoryConfidence: number | null =
-            existing.aiCategoryConfidence;
-
-        let merchantId = existing.merchantId;
-        let merchantRaw = existing.merchantRaw;
-
-        if (data.merchant !== undefined) {
-            merchantRaw = data.merchant.trim() || null;
-
-            if (merchantRaw) {
-                const resolvedMerchant =
-                    await resolveMerchant(merchantRaw);
-
-                const newMerchantId = resolvedMerchant.merchant.id;
-                const merchantChanged = newMerchantId !== existing.merchantId;
-                merchantId = newMerchantId;
-                const shouldRecategorize =
-                    merchantChanged &&
-                    !data.categoryId &&
-                    existing.categoryAssignmentSource !== CategoryAssignmentSource.USER;
-                if (shouldRecategorize) {
-                    const result =
-                        await categorizeMerchant({
-                            userId,
-                            merchant: resolvedMerchant.merchant,
-                            transactionType: data.type,
-                        });
-
-                    categoryId = result.category.id;
-                    categoryAssignmentSource =
-                        result.categoryAssignmentSource;
-                    aiCategoryConfidence =
-                        result.confidence;
-                }
-            } else {
-                merchantId = null;
-
-                if (!data.categoryId) {
-                    categoryAssignmentSource =
-                        CategoryAssignmentSource.USER;
-
-                    aiCategoryConfidence = null;
-                }
-            }
-        }
-
-        if (data.type !== TransactionType.TRANSFER) {
-            if (data.categoryId) {
-                categoryAssignmentSource =
-                    CategoryAssignmentSource.USER;
-                aiCategoryConfidence = null;
-            }
-
-            if (!categoryId) {
-                throw new Error(
-                    "Either categoryId or merchant is required.",
-                );
-            }
-
-            const category = await tx.category.findFirst({
-                where: {
-                    id: categoryId,
-                    userId,
-                },
+                transactionId,
             });
 
-            if (!category) {
-                throw new Error("Invalid categoryId");
-            }
-
-            if (category.type !== data.type) {
-                throw new Error("Category type does not match transaction type",);
-            }
-        }
-
-        /* =============================
-           REMOVE OLD ANALYTICS
-        ============================== */
-
-        await updateAnalytics(
-            tx,
-            userId,
-            existing.year,
-            existing.month,
-            existing.type,
-            existing.amount,
-            "decrement"
-        );
-
-
-        /* =============================
-           REMOVE OLD LEDGER
-        ============================== */
-
-        await tx.ledgerEntry.deleteMany({
-            where: {
-                transactionId: existing.id,
-            },
+        const {
+            amount,
+            date,
+            year,
+            month,
+        } = validateTransactionBasics({
+            amount: data.amount,
+            date: data.date,
         });
 
-        /* =============================
-           UPDATE TRANSACTION
-        ============================== */
+        const {
+            sourceAccountId,
+            destinationAccountId,
+        } = await validateTransactionAccounts({
+            tx,
+            userId,
+            type: data.type,
+            sourceAccountId:
+                data.sourceAccountId ??
+                existing.sourceAccountId,
+            destinationAccountId:
+                data.destinationAccountId ??
+                existing.destinationAccountId,
+        });
+
+        const merchant = await resolveTransactionUpdate({tx, userId, existing, data,});
+        await validateTransactionCategory({tx, userId, type: data.type, categoryId: merchant.categoryId,});
+        await removeTransactionEffects({tx, userId, transaction: existing,});
+
         const updated = await tx.transaction.update({
             where: {
                 id: existing.id,
@@ -719,71 +359,51 @@ export const updateTransaction = async (
                 date,
                 year,
                 month,
-                categoryId: data.type === TransactionType.TRANSFER ? null : categoryId,
-                categoryAssignmentSource: data.type === TransactionType.TRANSFER ? CategoryAssignmentSource.USER : categoryAssignmentSource,
-                aiCategoryConfidence,
-                merchantId,
-                merchantRaw,
+
+                merchantId: merchant.merchantId,
+                merchantRaw: merchant.merchantRaw,
+
+                categoryId:
+                    data.type === TransactionType.TRANSFER
+                        ? null
+                        : merchant.categoryId,
+
+                categoryAssignmentSource:
+                    data.type === TransactionType.TRANSFER
+                        ? CategoryAssignmentSource.USER
+                        : merchant.categoryAssignmentSource,
+
+                aiCategoryConfidence:
+                merchant.aiCategoryConfidence,
+
                 sourceAccountId,
                 destinationAccountId,
+
                 note: data.note ?? existing.note,
             },
             include: transactionInclude,
         });
-        /* =============================
-           LEARN MERCHANT
-        ============================== */
-
-        const merchantChanged =
-            updated.merchantId !== existing.merchantId;
-
-        const categoryChanged =
-            updated.categoryId !== existing.categoryId;
 
         if (
-            updated.merchantId &&
-            updated.categoryId &&
-            updated.categoryAssignmentSource === CategoryAssignmentSource.USER &&
-            data.type !== TransactionType.TRANSFER &&
-            (merchantChanged || categoryChanged)
+            updated.merchantId !== existing.merchantId ||
+            updated.categoryId !== existing.categoryId
         ) {
-            await learnMerchantCategory(
+            await learnUserMerchantMapping({
                 userId,
-                updated.merchantId,
-                updated.categoryId,
-                updated.categoryAssignmentSource === CategoryAssignmentSource.USER
-                    ? MerchantMappingSource.USER
-                    : MerchantMappingSource.AI
-            );
+                transaction: updated,
+                transactionType: data.type,
+            });
         }
 
-        /* =============================
-           REBUILD LEDGER
-        ============================== */
-
-        await postTransactionToLedger(
+        await applyTransactionEffects({
             tx,
             userId,
-            updated,
-            amount
-        );
-
-        /* =============================
-           APPLY ANALYTICS
-        ============================== */
-
-        await updateAnalytics(
-            tx,
-            userId,
-            year,
-            month,
-            data.type,
+            transaction: updated,
             amount,
-            "increment"
-        );
+        });
 
         return serialize(
-            mapTransaction(updated)
+            mapTransaction(updated),
         );
     });
 };
