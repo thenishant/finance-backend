@@ -1,5 +1,6 @@
 import {Router} from "express";
 import {
+    disconnectGmail,
     getGmailStatus,
     getGoogleUrl,
     googleCallback,
@@ -16,4 +17,5 @@ router.get("/status", authenticate, getGmailStatus);
 router.post("/sync", authenticate, syncGmail);
 router.post("/process-existing", authenticate, processExistingEmails);
 router.delete("/stored-messages", authenticate, purgeStoredEmails);
+router.delete("/disconnect", authenticate, disconnectGmail);
 export default router;

@@ -3,7 +3,6 @@ import {prisma} from "../../../database/prisma";
 import {ingestGmailEmail, processGmailMessage} from "./ingestion/transaction.ingestion";
 import {cleanEmailBody} from "./utils/body-cleaner";
 import {SyncGmailDTO} from "./gmail.dto";
-import {Credentials} from "google-auth-library";
 
 import {
     createGmailClient,
@@ -14,6 +13,19 @@ import {
     GOOGLE_SCOPES,
     verifyGoogleState,
 } from "./gmail.utils";
+
+export const disconnectGmail = async (userId: string,) => {
+    await prisma.gmailAccount.deleteMany({
+        where: {
+            userId,
+        },
+    });
+
+    return {
+        disconnected: true,
+    };
+};
+
 
 const decodeBase64 = (input?: string | null): string => {
     if (!input) {
@@ -62,18 +74,6 @@ const extractBody = (
     return "";
 };
 
-const gmailAccountData = (
-    email: string,
-    tokens: Credentials
-) => ({
-    email,
-    refreshToken: tokens.refresh_token!,
-    accessToken: tokens.access_token ?? null,
-    expiresAt: tokens.expiry_date
-        ? new Date(tokens.expiry_date)
-        : null,
-});
-
 export const connectGoogleAccount = async ({
                                                code,
                                                state,
@@ -95,7 +95,11 @@ export const connectGoogleAccount = async ({
 
     const {tokens} = await oauth2Client.getToken(code);
 
-    console.log("Google tokens:", tokens);
+    console.log("[Google] Tokens", {
+        hasAccessToken: !!tokens.access_token,
+        hasRefreshToken: !!tokens.refresh_token,
+        expiry: tokens.expiry_date,
+    });
 
     oauth2Client.setCredentials(tokens);
 
@@ -137,6 +141,11 @@ export const connectGoogleAccount = async ({
             ? new Date(tokens.expiry_date)
             : existingAccount?.expiresAt ?? null,
     };
+
+    console.log("[Google] Saving account", {
+        refreshToken: !!account.refreshToken,
+        accessToken: !!account.accessToken,
+    });
 
     await prisma.gmailAccount.upsert({
         where: {
@@ -200,41 +209,53 @@ export const syncMailbox = async (
 ) => {
     const gmailAccount = await getConnectedGmailAccount(userId);
 
+    console.info("[Gmail] Account", {
+        email: gmailAccount.email,
+        hasAccessToken: !!gmailAccount.accessToken,
+        hasRefreshToken: !!gmailAccount.refreshToken,
+        expiresAt: gmailAccount.expiresAt,
+    });
+
     const gmail = createGmailClient(gmailAccount.refreshToken);
 
-    const listResponse = await gmail.users.messages.list({
-        userId: "me",
-        q: GMAIL_QUERY,
-        maxResults: options.maxResults ?? 1,
-        pageToken: options.pageToken,
-    });
+    let listResponse;
+    try {
+        listResponse = await gmail.users.messages.list({
+            userId: "me",
+            q: GMAIL_QUERY,
+            maxResults: options.maxResults ?? 1,
+            pageToken: options.pageToken,
+        });
+    } catch (error: any) {
+        console.error("[Gmail] API Error", {
+            message: error.message,
+            code: error.code,
+            response: error.response?.data,
+        });
+
+        throw error;
+    }
 
     const messages = listResponse.data.messages ?? [];
 
-    const results = await Promise.all(
-        messages
-            .filter(
-                (
-                    message
-                ): message is gmail_v1.Schema$Message & { id: string } =>
-                    !!message.id
+    const results = await Promise.all(messages
+        .filter(
+            (
+                message
+            ): message is gmail_v1.Schema$Message & { id: string } =>
+                !!message.id
+        )
+        .map(message =>
+            processMessage(
+                gmail,
+                userId,
+                message.id
             )
-            .map(message =>
-                processMessage(
-                    gmail,
-                    userId,
-                    message.id
-                )
-            )
+        )
     );
 
-    const transactionsCreated = results.filter(
-        result => result.status === "created"
-    ).length;
-
-    const duplicates = results.filter(
-        result => result.status === "duplicate"
-    ).length;
+    const transactionsCreated = results.filter(result => result.status === "created").length;
+    const duplicates = results.filter(result => result.status === "duplicate").length;
 
     const lastSyncAt = new Date();
 

@@ -23,7 +23,6 @@ export const getGoogleUrl = async (
 export const googleCallback = async (
     req: Request,
     res: Response,
-    next: NextFunction
 ) => {
     try {
         await gmailService.connectGoogleAccount({
@@ -109,6 +108,25 @@ export const purgeStoredEmails = async (
     try {
         const result = await gmailService.purgeStoredEmails(
             getUserId(req)
+        );
+
+        return res.json({
+            success: true,
+            data: result,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const disconnectGmail = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+) => {
+    try {
+        const result = await gmailService.disconnectGmail(
+            getUserId(req),
         );
 
         return res.json({
