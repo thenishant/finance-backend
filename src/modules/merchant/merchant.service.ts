@@ -306,8 +306,7 @@ export const categorizeMerchant = async ({
     const key =
         `${userId}:${merchant.id}:${transactionType}`;
 
-    const existing =
-        categorizingMerchants.get(key);
+    const existing = categorizingMerchants.get(key);
 
     if (existing) {
         console.info("[Merchant] Waiting for in-flight categorization", {
@@ -318,11 +317,6 @@ export const categorizeMerchant = async ({
     }
 
     const promise = (async (): Promise<MerchantCategorizationResult> => {
-
-        console.info("[Merchant] Categorizing", {
-            merchant: merchant.name,
-            transactionType,
-        });
 
         const latestMapping =
             await prisma.merchantMapping.findUnique({
@@ -337,30 +331,26 @@ export const categorizeMerchant = async ({
                 },
             });
 
-        if (
-            latestMapping &&
-            latestMapping.category.type === transactionType
-        ) {
+        if (latestMapping && latestMapping.category.type === transactionType) {
             return {
                 merchant,
                 category: latestMapping.category,
-                confidence:
-                    latestMapping.confidence ?? 1,
-                reasoning:
-                    "Previously categorized.",
+                confidence: latestMapping.confidence ?? 1,
+                reasoning: "Previously categorized.",
                 fromCache: true,
-                categoryAssignmentSource:
-                    latestMapping.source === MerchantMappingSource.USER
-                        ? CategoryAssignmentSource.USER
-                        : CategoryAssignmentSource.AI_EXISTING,
+                categoryAssignmentSource: latestMapping.source === MerchantMappingSource.USER
+                    ? CategoryAssignmentSource.USER
+                    : CategoryAssignmentSource.AI_EXISTING,
             };
         }
 
+        console.info("[Merchant] Categorizing", {
+            merchant: merchant.name,
+            transactionType,
+        });
+
         const categoryOptions =
-            await getMerchantCategoryOptions(
-                userId,
-                transactionType,
-            );
+            await getMerchantCategoryOptions(userId, transactionType,);
 
         if (categoryOptions.length === 0) {
             throw new Error(
@@ -369,22 +359,13 @@ export const categorizeMerchant = async ({
         }
 
         const aiResult =
-            await categorizeMerchantWithAI(
-                merchant.name,
-                transactionType,
-                categoryOptions,
-            );
+            await categorizeMerchantWithAI(merchant.name, transactionType, categoryOptions,);
 
         const category =
-            await getCategoryById(
-                userId,
-                aiResult.categoryId,
-            );
+            await getCategoryById(userId, aiResult.categoryId,);
 
         if (!category) {
-            throw new Error(
-                "AI returned an invalid category.",
-            );
+            throw new Error("AI returned an invalid category.",);
         }
 
         console.info("[Merchant] AI categorized", {
@@ -393,13 +374,7 @@ export const categorizeMerchant = async ({
             confidence: aiResult.confidence,
         });
 
-        await learnMerchantCategory(
-            userId,
-            merchant.id,
-            category.id,
-            MerchantMappingSource.AI,
-            aiResult.confidence,
-        );
+        await learnMerchantCategory(userId, merchant.id, category.id, MerchantMappingSource.AI, aiResult.confidence,);
 
         return {
             merchant,
@@ -413,10 +388,7 @@ export const categorizeMerchant = async ({
 
     })();
 
-    categorizingMerchants.set(
-        key,
-        promise,
-    );
+    categorizingMerchants.set(key, promise,);
 
     try {
         return await promise;
@@ -446,14 +418,8 @@ export const learnMerchantCategory = async (
             },
         });
 
-        if (
-            existing &&
-            existing.source === MerchantMappingSource.USER
-        ) {
-            console.info("[Merchant] Preserving USER mapping", {
-                merchantId,
-            });
-
+        if (existing && existing.source === MerchantMappingSource.USER) {
+            console.info("[Merchant] Preserving USER mapping", {merchantId});
             return;
         }
     }
@@ -529,11 +495,7 @@ export const resolveTransactionMerchant = async ({
     }
 
     const categorization =
-        await categorizeMerchant({
-            userId,
-            merchant: resolvedMerchant.merchant,
-            transactionType,
-        });
+        await categorizeMerchant({userId, merchant: resolvedMerchant.merchant, transactionType,});
 
     return {
         merchant: resolvedMerchant.merchant,

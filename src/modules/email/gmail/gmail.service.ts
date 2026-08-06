@@ -237,23 +237,24 @@ export const syncMailbox = async (
     }
 
     const messages = listResponse.data.messages ?? [];
-
-    const results = await Promise.all(messages
-        .filter(
-            (
-                message
-            ): message is gmail_v1.Schema$Message & { id: string } =>
-                !!message.id
-        )
-        .map(message =>
-            processMessage(
-                gmail,
-                userId,
-                message.id
-            )
-        )
+    const messagesToProcess = messages.filter(
+        (message
+        ): message is gmail_v1.Schema$Message & { id: string } =>
+            !!message.id,
     );
-
+    const results: Awaited<ReturnType<typeof processMessage>>[] = [];
+    let index = 0;
+    for (const message of messagesToProcess) {
+        index++;
+        console.info(`[Sync] ${index}/${messagesToProcess.length}`, message.id,);
+        try {
+            const result = await processMessage(gmail, userId, message.id,);
+            results.push(result);
+        } catch (error) {
+            console.error(`[Sync] Failed ${message.id}`, error,
+            );
+        }
+    }
     const transactionsCreated = results.filter(result => result.status === "created").length;
     const duplicates = results.filter(result => result.status === "duplicate").length;
 

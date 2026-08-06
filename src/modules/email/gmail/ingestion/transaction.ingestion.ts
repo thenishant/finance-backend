@@ -41,12 +41,7 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion,
         subject: email.subject,
     });
 
-    const shouldCategorizeMerchant =
-        parsed.type === TransactionType.EXPENSE ||
-        (
-            parsed.type === TransactionType.INCOME &&
-            parsed.merchant?.trim().startsWith("UPI/")
-        );
+    const shouldCategorizeMerchant = parsed.type !== TransactionType.TRANSFER;
 
     const merchant =
         await resolveTransactionMerchant({

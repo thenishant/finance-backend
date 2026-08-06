@@ -190,13 +190,7 @@ export const resolveNewTransactionMerchant = async ({userId, merchantRaw, transa
     categoryId?: string | null;
 }): Promise<ResolveTransactionMerchantResult> => {
 
-    const shouldCategorize = !categoryId && (
-        transactionType === TransactionType.EXPENSE || (
-            transactionType === TransactionType.INCOME &&
-            merchantRaw?.trim().startsWith("UPI/")
-        )
-    );
-
+    const shouldCategorize = !categoryId && transactionType !== TransactionType.TRANSFER;
     return resolveTransactionMerchant({userId, merchantRaw, transactionType, shouldCategorize,});
 };
 
@@ -258,13 +252,8 @@ export const resolveTransactionUpdate = async ({tx, userId, existing, data,}: {
         }
 
         const merchantChanged = merchantRaw !== existing.merchantRaw;
-        const shouldCategorize = (data.type === TransactionType.EXPENSE || (
-                    data.type ===
-                    TransactionType.INCOME &&
-                    merchantRaw.startsWith("UPI/")
-                )
-            ) &&
-            merchantChanged && !data.categoryId && existing.categoryAssignmentSource !== CategoryAssignmentSource.USER;
+        const shouldCategorize = data.type !== TransactionType.TRANSFER && merchantChanged && !data.categoryId
+            && existing.categoryAssignmentSource !== CategoryAssignmentSource.USER;
 
         const merchant = await resolveTransactionMerchant({
             userId,
