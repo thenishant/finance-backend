@@ -122,8 +122,11 @@ export function normalizeMerchantName(name?: string | null): string {
 
     normalized = normalized.toLowerCase();
 
+    // Replace separators before removing punctuation
+    normalized = normalized.replace(/[-_.]/g, " ");
+
     // Remove UPI handles
-    normalized = normalized.replace(/@[a-z0-9._-]+/g, " ");
+    normalized = normalized.replace(/@[a-z0-9._-]+/gi, "");
 
     // Remove URLs
     normalized = normalized.replace(/https?:\/\/\S+/g, " ");

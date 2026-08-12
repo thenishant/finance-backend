@@ -18,8 +18,7 @@ export interface GmailEmailForIngestion {
     receivedAt?: Date | null;
 }
 
-export const ingestGmailEmail = async (email: GmailEmailForIngestion,
-) => {
+export const ingestGmailEmail = async (email: GmailEmailForIngestion) => {
     const provider = detectBankProvider(email.sender);
     if (provider === BankProvider.UNKNOWN) {
         return {
@@ -33,7 +32,9 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion,
     );
 
     if (!parsed) {
-        return {status: "not-a-transaction" as const,};
+        return {
+            status: "not-a-transaction" as const,
+        };
     }
 
     console.info("[Ingest] Processing 1", {
@@ -138,6 +139,7 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion,
                 amount,
                 "increment",
             );
+
             console.info("[Ingest] Processing 2", {
                 gmailMessageId: email.gmailMessageId,
                 subject: email.subject,

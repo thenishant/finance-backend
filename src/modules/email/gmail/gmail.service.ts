@@ -184,14 +184,8 @@ const processMessage = async (
     const headers = payload?.headers ?? [];
     const sender = getHeader(headers, "from");
     const subject = getHeader(headers, "subject");
-
-    const body = cleanEmailBody(
-        extractBody(payload)
-    );
-
-    const receivedAt = detail.data.internalDate
-        ? new Date(Number(detail.data.internalDate))
-        : null;
+    const body = cleanEmailBody(extractBody(payload));
+    const receivedAt = detail.data.internalDate ? new Date(Number(detail.data.internalDate)) : null;
 
     return ingestGmailEmail({
         userId,

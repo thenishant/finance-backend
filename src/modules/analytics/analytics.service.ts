@@ -127,20 +127,20 @@ export const getMonthlyAnalytics = async (
     type RawRow = {
         parentId: string | null;
         parentName: string | null;
-        childId: string;
-        childName: string;
+        childId: string | null;
+        childName: string | null;
         total: unknown;
     };
 
     const rawBreakdown = await prisma.$queryRaw<RawRow[]>`
-        SELECT parent.id     as "parentId",
-               parent.name   as "parentName",
-               child.id      as "childId",
-               child.name    as "childName",
-               SUM(t.amount) as total
+        SELECT parent.id     AS "parentId",
+               parent.name   AS "parentName",
+               child.id      AS "childId",
+               child.name    AS "childName",
+               SUM(t.amount) AS total
         FROM "Transaction" t
-                 JOIN "Category" child
-                      ON child.id = t."categoryId"
+                 LEFT JOIN "Category" child
+                           ON child.id = t."categoryId"
                  LEFT JOIN "Category" parent
                            ON parent.id = child."parentId"
         WHERE t."userId" = ${userId}
@@ -148,38 +148,48 @@ export const getMonthlyAnalytics = async (
           AND t."type" = 'EXPENSE'
           AND t."year" = ${year}
           AND t."month" = ${month}
-        GROUP BY parent.id, parent.name, child.id, child.name
-        ORDER BY total DESC
+        GROUP BY parent.id,
+                 parent.name,
+                 child.id,
+                 child.name
     `;
 
     const parentMap: Record<string, ExpenseParent> = {};
 
     for (const row of rawBreakdown) {
 
-        const parentId = row.parentId ?? row.childId;
-        const parentName = row.parentName ?? row.childName;
         const amount = toNumber(row.total);
+
+        const parentId =
+            row.parentId ??
+            row.childId ??
+            "uncategorized";
+
+        const parentName =
+            row.parentName ??
+            row.childName ??
+            "Uncategorized";
 
         if (!parentMap[parentId]) {
             parentMap[parentId] = {
                 category: parentName,
                 total: 0,
-                children: []
+                children: [],
             };
         }
 
         parentMap[parentId].total += amount;
 
-        if (row.parentId) {
+        if (row.childId) {
             parentMap[parentId].children.push({
                 id: row.childId,
-                name: row.childName,
-                total: amount
+                name: row.childName ?? "Unknown",
+                total: amount,
             });
         }
     }
 
-    const expenseBreakdown = Object.values(parentMap);
+    const expenseBreakdown = Object.values(parentMap).sort((a, b) => b.total - a.total);
 
     /* Investment */
 
@@ -197,10 +207,21 @@ export const getMonthlyAnalytics = async (
             ? Math.max(goalAmount - invested, 0)
             : null;
 
-    const progress =
-        goalAmount && goalAmount > 0
-            ? Number((invested / goalAmount).toFixed(2))
-            : null;
+    const progress = goalAmount !== null && goalAmount > 0
+        ? Number((invested / goalAmount).toFixed(2))
+        : null;
+
+    const breakdownTotal =
+        expenseBreakdown.reduce(
+            (sum, category) => sum + category.total,
+            0,
+        );
+
+    console.log({
+        totalExpense,
+        breakdownTotal,
+        difference: totalExpense - breakdownTotal,
+    });
 
     return {
         totalIncome,
@@ -210,15 +231,16 @@ export const getMonthlyAnalytics = async (
             totalIncome -
             totalExpense -
             totalInvestment,
-        investmentGoal: goalPercent
-            ? {
-                percent: goalPercent,
-                goalAmount: goalAmount!,
-                invested,
-                remaining: remaining!,
-                progress
-            }
-            : null,
+        investmentGoal:
+            goalPercent !== null
+                ? {
+                    percent: goalPercent,
+                    goalAmount: goalAmount!,
+                    invested,
+                    remaining: remaining!,
+                    progress
+                }
+                : null,
         expenseBreakdown
     };
 };

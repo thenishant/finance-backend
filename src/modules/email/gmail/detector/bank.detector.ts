@@ -10,7 +10,7 @@ export const detectBankProvider = (sender?: string | null): BankProvider => {
         return BankProvider.AXIS;
     }
 
-    if (from.includes("hdfcbank.bank.in")) {
+    if (from.endsWith("@hdfcbank.bank.in") || from.includes("hdfcbank.bank.in")) {
         return BankProvider.HDFC;
     }
 
