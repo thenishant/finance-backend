@@ -313,22 +313,32 @@ export const updateTransaction = async (
 ) => {
     return prisma.$transaction(async tx => {
 
-        const existing =
-            await getExistingTransaction({
-                tx,
-                userId,
-                transactionId,
-            });
+        const existing = await getExistingTransaction({
+            tx,
+            userId,
+            transactionId,
+        });
 
         const {
             amount,
             date,
-            year,
-            month,
         } = validateTransactionBasics({
             amount: data.amount,
             date: data.date,
         });
+
+        const sameDay =
+            existing.date.getFullYear() === date.getFullYear() &&
+            existing.date.getMonth() === date.getMonth() &&
+            existing.date.getDate() === date.getDate();
+
+        const year = sameDay
+            ? existing.year
+            : date.getFullYear();
+
+        const month = sameDay
+            ? existing.month
+            : date.getMonth() + 1;
 
         const {
             sourceAccountId,
@@ -345,9 +355,35 @@ export const updateTransaction = async (
                 existing.destinationAccountId,
         });
 
-        const merchant = await resolveTransactionUpdate({tx, userId, existing, data,});
-        await validateTransactionCategory({tx, userId, type: data.type, categoryId: merchant.categoryId,});
-        await removeTransactionEffects({tx, userId, transaction: existing,});
+        const merchant = await resolveTransactionUpdate({
+            tx,
+            userId,
+            existing,
+            data,
+        });
+
+        await validateTransactionCategory({
+            tx,
+            userId,
+            type: data.type,
+            categoryId: merchant.categoryId,
+        });
+
+        const analyticsChanged =
+            existing.type !== data.type ||
+            !existing.amount.equals(amount) ||
+            existing.year !== year ||
+            existing.month !== month ||
+            existing.sourceAccountId !== sourceAccountId ||
+            existing.destinationAccountId !== destinationAccountId;
+
+        if (analyticsChanged) {
+            await removeTransactionEffects({
+                tx,
+                userId,
+                transaction: existing,
+            });
+        }
 
         const updated = await tx.transaction.update({
             where: {
@@ -395,12 +431,14 @@ export const updateTransaction = async (
             });
         }
 
-        await applyTransactionEffects({
-            tx,
-            userId,
-            transaction: updated,
-            amount,
-        });
+        if (analyticsChanged) {
+            await applyTransactionEffects({
+                tx,
+                userId,
+                transaction: updated,
+                amount,
+            });
+        }
 
         return serialize(
             mapTransaction(updated),

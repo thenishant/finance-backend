@@ -60,7 +60,7 @@ model Transaction {
   deletedAt                DateTime?
   externalReference        String?
   fingerprint              String?                  @unique
-  gmailMessageId           String?
+  gmailMessageId           String?                  @unique
   source                   TransactionSource        @default(MANUAL)
   destinationAccountId     String?
   sourceAccountId          String?

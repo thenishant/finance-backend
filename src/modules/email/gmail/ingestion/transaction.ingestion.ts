@@ -18,13 +18,19 @@ export interface GmailEmailForIngestion {
     receivedAt?: Date | null;
 }
 
-export const ingestGmailEmail = async (email: GmailEmailForIngestion) => {
-    const provider = detectBankProvider(email.sender);
+export const ingestGmailEmail = async (
+    email: GmailEmailForIngestion,
+) => {
+
+    const provider =
+        detectBankProvider(email.sender);
+
     if (provider === BankProvider.UNKNOWN) {
         return {
             status: "unsupported" as const,
         };
     }
+
     const parsed = parseEmail(
         provider,
         email.subject,
@@ -37,19 +43,13 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion) => {
         };
     }
 
-    console.info("[Ingest] Processing 1", {
-        gmailMessageId: email.gmailMessageId,
-        subject: email.subject,
-    });
-
-    const shouldCategorizeMerchant = parsed.type !== TransactionType.TRANSFER;
-
     const merchant =
         await resolveTransactionMerchant({
             userId: email.userId,
             merchantRaw: parsed.merchant,
             transactionType: parsed.type,
-            shouldCategorize: shouldCategorizeMerchant,
+            shouldCategorize:
+                parsed.type !== TransactionType.TRANSFER,
         });
 
     const date =
@@ -58,105 +58,116 @@ export const ingestGmailEmail = async (email: GmailEmailForIngestion) => {
         new Date();
 
     const fingerprint = createHash("sha256")
-        .update(`gmail:${email.userId}:${email.gmailMessageId}`,)
+        .update(
+            `gmail:${email.userId}:${email.gmailMessageId}`,
+        )
         .digest("hex");
 
-    try {
-        return await prisma.$transaction(async tx => {
-            const existing =
-                await tx.transaction.findUnique({
+    return prisma.$transaction(async tx => {
+        const existing =
+            await tx.transaction.findUnique({
+                where: {
+                    gmailMessageId:
+                    email.gmailMessageId,
+                },
+            });
+
+        if (existing) {
+            return {
+                status: "duplicate" as const,
+                transactionId: existing.id,
+            };
+        }
+
+        const sourceAccount =
+            parsed.accountLast4
+                ? await tx.financialAccount.findFirst({
                     where: {
-                        fingerprint,
-                    },
-                });
-
-            if (existing) {
-                return {
-                    status: "duplicate" as const,
-                    transactionId: existing.id,
-                };
-            }
-
-            const sourceAccount =
-                parsed.accountLast4
-                    ? await tx.financialAccount.findFirst({
-                        where: {
-                            userId: email.userId,
-                            last4: parsed.accountLast4,
-                            type:
-                                parsed.accountType ??
-                                FinancialAccountType.CREDIT_CARD,
-                            isActive: true,
-                            isArchived: false,
-                            deletedAt: null,
-                        },
-                    })
-                    : null;
-
-            const amount = new Prisma.Decimal(parsed.amount,);
-            const transaction =
-                await tx.transaction.create({
-                    data: {
                         userId: email.userId,
-                        type: parsed.type,
-                        amount,
-                        date,
-                        year: date.getFullYear(),
-                        month: date.getMonth() + 1,
-                        merchantId: merchant.merchantId,
-                        merchantRaw: merchant.merchantRaw,
-                        categoryId: merchant.categoryId,
-                        categoryAssignmentSource: merchant.categoryAssignmentSource,
-                        aiCategoryConfidence: merchant.confidence,
-                        source: TransactionSource.GMAIL,
-                        sourceAccountId: sourceAccount?.id ?? null,
-                        fingerprint,
-                        metadata: {
-                            provider,
-                            parserVersion: 1,
-                            accountLast4: parsed.accountLast4 ?? null,
-                            accountType: parsed.accountType ?? FinancialAccountType.CREDIT_CARD,
-                            accountMatched: Boolean(sourceAccount),
-                        },
+                        last4: parsed.accountLast4,
+                        type:
+                            parsed.accountType ??
+                            FinancialAccountType.CREDIT_CARD,
+                        isActive: true,
+                        isArchived: false,
+                        deletedAt: null,
                     },
-                });
+                })
+                : null;
 
-            if (sourceAccount) {
-                await postTransactionToLedger(
-                    tx,
-                    email.userId,
-                    transaction,
+        const amount =
+            new Prisma.Decimal(parsed.amount);
+
+        const transaction =
+            await tx.transaction.create({
+                data: {
+                    userId: email.userId,
+
+                    type: parsed.type,
                     amount,
-                );
-            }
 
-            await updateAnalytics(
+                    date,
+                    year: date.getFullYear(),
+                    month: date.getMonth() + 1,
+
+                    merchantId: merchant.merchantId,
+                    merchantRaw: merchant.merchantRaw,
+
+                    categoryId: merchant.categoryId,
+                    categoryAssignmentSource:
+                    merchant.categoryAssignmentSource,
+                    aiCategoryConfidence:
+                    merchant.confidence,
+
+                    source: TransactionSource.GMAIL,
+
+                    sourceAccountId:
+                        sourceAccount?.id ?? null,
+
+                    gmailMessageId:
+                    email.gmailMessageId,
+
+                    fingerprint,
+
+                    metadata: {
+                        provider,
+                        parserVersion: 1,
+                        accountLast4:
+                            parsed.accountLast4 ?? null,
+                        accountType:
+                            parsed.accountType ??
+                            FinancialAccountType.CREDIT_CARD,
+                        accountMatched:
+                            Boolean(sourceAccount),
+                    },
+                },
+            });
+
+        if (sourceAccount) {
+            await postTransactionToLedger(
                 tx,
                 email.userId,
-                date.getFullYear(),
-                date.getMonth() + 1,
-                parsed.type,
+                transaction,
                 amount,
-                "increment",
             );
-
-            console.info("[Ingest] Processing 2", {
-                gmailMessageId: email.gmailMessageId,
-                subject: email.subject,
-            });
-            return {
-                status: "created" as const,
-                transactionId: transaction.id,
-            };
-        });
-    } catch (error) {
-        if (error instanceof Prisma.PrismaClientKnownRequestError) {
-            console.error("P2002", error.meta);
         }
-        throw error;
-    }
-};
 
+        await updateAnalytics(
+            tx,
+            email.userId,
+            transaction.year,
+            transaction.month,
+            transaction.type,
+            amount,
+            "increment",
+        );
+
+        return {
+            status: "created" as const,
+            transactionId: transaction.id,
+        };
+    });
+};
 // This only exists to process and remove email rows created by older versions.
 export const processGmailMessage = async (
     gmailMessageId: string,

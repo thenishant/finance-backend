@@ -194,27 +194,64 @@ export const resolveNewTransactionMerchant = async ({userId, merchantRaw, transa
     return resolveTransactionMerchant({userId, merchantRaw, transactionType, shouldCategorize,});
 };
 
-export const applyTransactionEffects = async ({tx, userId, transaction, amount,}: {
+export const applyTransactionEffects = async ({
+                                                  tx,
+                                                  userId,
+                                                  transaction,
+                                                  amount,
+                                              }: {
     tx: Prisma.TransactionClient;
     userId: string;
     transaction: Prisma.TransactionGetPayload<{}>;
     amount: Prisma.Decimal;
 }) => {
-    await postTransactionToLedger(tx, userId, transaction, amount,);
 
-    await updateAnalytics(tx, userId, transaction.year, transaction.month, transaction.type, amount, "increment",);
+    const shouldPostLedger =
+        (transaction.type === TransactionType.INCOME &&
+            transaction.destinationAccountId) ||
+
+        ((transaction.type === TransactionType.EXPENSE ||
+                transaction.type === TransactionType.INVESTMENT) &&
+            transaction.sourceAccountId) ||
+
+        (transaction.type === TransactionType.TRANSFER &&
+            transaction.sourceAccountId &&
+            transaction.destinationAccountId);
+
+    if (shouldPostLedger) {
+        await postTransactionToLedger(
+            tx,
+            userId,
+            transaction,
+            amount,
+        );
+    }
+
+    await updateAnalytics(
+        tx,
+        userId,
+        transaction.year,
+        transaction.month,
+        transaction.type,
+        amount,
+        "increment",
+    );
 };
 
-export const removeTransactionEffects = async ({tx, userId, transaction,}: {
+export const removeTransactionEffects = async ({
+                                                   tx,
+                                                   userId,
+                                                   transaction,
+                                               }: {
     tx: Prisma.TransactionClient;
     userId: string;
     transaction: {
         id: string;
+        type: TransactionType;
         year: number;
         month: number;
-        type: TransactionType;
         amount: Prisma.Decimal;
-    }
+    };
 }) => {
 
     await tx.ledgerEntry.deleteMany({
@@ -223,55 +260,104 @@ export const removeTransactionEffects = async ({tx, userId, transaction,}: {
         },
     });
 
-    await updateAnalytics(tx, userId, transaction.year, transaction.month, transaction.type, transaction.amount, "decrement",);
+    await updateAnalytics(
+        tx,
+        userId,
+        transaction.year,
+        transaction.month,
+        transaction.type,
+        transaction.amount,
+        "decrement",
+    );
 };
 
-export const resolveTransactionUpdate = async ({tx, userId, existing, data,}: {
+export const resolveTransactionUpdate = async ({
+                                                   tx,
+                                                   userId,
+                                                   existing,
+                                                   data,
+                                               }: {
     tx: Prisma.TransactionClient;
     userId: string;
     existing: Transaction;
-    data: { type: TransactionType; merchant?: string; categoryId?: string; };
+    data: {
+        type: TransactionType;
+        merchant?: string;
+        categoryId?: string;
+    };
 }) => {
 
     let merchantId = existing.merchantId;
     let merchantRaw = existing.merchantRaw;
+
     let categoryId = data.categoryId ?? existing.categoryId;
     let categoryAssignmentSource = existing.categoryAssignmentSource;
     let aiCategoryConfidence = existing.aiCategoryConfidence;
+
     if (data.merchant !== undefined) {
+
         merchantRaw = data.merchant.trim() || null;
+
         if (!merchantRaw) {
             merchantId = null;
+
             if (!data.categoryId) {
                 categoryId = null;
                 categoryAssignmentSource = CategoryAssignmentSource.USER;
                 aiCategoryConfidence = null;
             }
 
-            return {merchantId, merchantRaw, categoryId, categoryAssignmentSource, aiCategoryConfidence,};
+            return {
+                merchantId,
+                merchantRaw,
+                categoryId,
+                categoryAssignmentSource,
+                aiCategoryConfidence,
+            };
         }
 
-        const merchantChanged = merchantRaw !== existing.merchantRaw;
-        const shouldCategorize = data.type !== TransactionType.TRANSFER && merchantChanged && !data.categoryId
-            && existing.categoryAssignmentSource !== CategoryAssignmentSource.USER;
+        const merchantChanged =
+            merchantRaw !== existing.merchantRaw;
 
-        const merchant = await resolveTransactionMerchant({
-            userId,
-            merchantRaw,
-            transactionType: data.type,
-            shouldCategorize,
-        });
+        const shouldCategorize =
+            data.type !== TransactionType.TRANSFER &&
+            merchantChanged &&
+            !data.categoryId &&
+            existing.categoryAssignmentSource !==
+            CategoryAssignmentSource.USER;
+
+        const merchant =
+            await resolveTransactionMerchant({
+                userId,
+                merchantRaw,
+                transactionType: data.type,
+                shouldCategorize,
+            });
 
         merchantId = merchant.merchantId;
         merchantRaw = merchant.merchantRaw;
+
         if (merchant.categoryId) {
             categoryId = merchant.categoryId;
-            categoryAssignmentSource = merchant.categoryAssignmentSource;
-            aiCategoryConfidence = merchant.confidence;
+            categoryAssignmentSource =
+                merchant.categoryAssignmentSource;
+            aiCategoryConfidence =
+                merchant.confidence;
+        } else if (merchantChanged && !data.categoryId) {
+            categoryId = null;
+            categoryAssignmentSource =
+                CategoryAssignmentSource.USER;
+            aiCategoryConfidence = null;
         }
     }
 
-    return {merchantId, merchantRaw, categoryId, categoryAssignmentSource, aiCategoryConfidence,};
+    return {
+        merchantId,
+        merchantRaw,
+        categoryId,
+        categoryAssignmentSource,
+        aiCategoryConfidence,
+    };
 };
 
 export const getDeletedTransaction = async ({tx, userId, transactionId,}: {
