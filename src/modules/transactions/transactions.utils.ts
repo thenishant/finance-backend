@@ -316,9 +316,7 @@ export const resolveTransactionUpdate = async ({
             };
         }
 
-        const merchantChanged =
-            merchantRaw !== existing.merchantRaw;
-
+        const merchantChanged = merchantRaw !== existing.merchantRaw;
         const shouldCategorize =
             data.type !== TransactionType.TRANSFER &&
             merchantChanged &&
