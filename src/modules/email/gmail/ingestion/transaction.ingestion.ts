@@ -59,7 +59,7 @@ export const ingestGmailEmail = async (
 
     const fingerprint = createHash("sha256")
         .update(
-            `gmail:${email.userId}:${email.gmailMessageId}`,
+            `${email.userId}|${parsed.type}|${parsed.amount}|${parsed.transactionDate?.toISOString()}|${parsed.merchant}|${parsed.accountLast4}`
         )
         .digest("hex");
 
@@ -68,9 +68,9 @@ export const ingestGmailEmail = async (
             const existing = await tx.transaction.findFirst({
                 where: {
                     OR: [{
-                        gmailMessageId: email.gmailMessageId,
+                        gmailMessageId: email.gmailMessageId
                     }, {
-                        fingerprint,
+                        fingerprint
                     }],
                 },
             });
@@ -171,12 +171,10 @@ export const ingestGmailEmail = async (
                 },
             });
 
-            if (existing) {
-                return {
-                    status: "duplicate" as const,
-                    transactionId: existing.id,
-                };
-            }
+            return {
+                status: "duplicate" as const,
+                transactionId: existing?.id,
+            };
         }
 
         throw error;
