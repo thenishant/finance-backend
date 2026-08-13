@@ -76,10 +76,10 @@ model Transaction {
   ledgerEntries            LedgerEntry[]
   category                 Category?                @relation(fields: [categoryId], references: [id])
   destinationAccount       FinancialAccount?        @relation("DestinationAccount", fields: [destinationAccountId], references: [id])
-  gmailMessage             GmailMessage?            @relation(fields: [gmailMessageId], references: [id])
   merchant                 Merchant?                @relation(fields: [merchantId], references: [id])
   sourceAccount            FinancialAccount?        @relation("SourceAccount", fields: [sourceAccountId], references: [id])
   user                     User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gmailMessages            GmailMessage[]
 
   @@index([userId])
   @@index([date])
@@ -152,17 +152,16 @@ model GmailAccount {
 }
 
 model GmailMessage {
-  id             String        @id @default(uuid())
-  gmailMessageId String        @unique
+  id             String       @id @default(uuid())
+  gmailMessageId String       @unique
   gmailAccountId String
   sender         String?
   subject        String?
   body           String
-  processed      Boolean       @default(false)
-  createdAt      DateTime      @default(now())
+  processed      Boolean      @default(false)
+  createdAt      DateTime     @default(now())
   receivedAt     DateTime?
-  gmailAccount   GmailAccount  @relation(fields: [gmailAccountId], references: [id], onDelete: Cascade)
-  transactions   Transaction[]
+  gmailAccount   GmailAccount @relation(fields: [gmailAccountId], references: [id], onDelete: Cascade)
 
   @@index([gmailAccountId])
   @@index([processed])
