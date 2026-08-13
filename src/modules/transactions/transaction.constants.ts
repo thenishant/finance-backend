@@ -1,7 +1,11 @@
 import {Prisma} from "@prisma/client";
 
 export const transactionInclude = {
-    category: true,
+    category: {
+        include: {
+            parent: true,
+        },
+    },
     merchant: true,
     sourceAccount: true,
     destinationAccount: true,
