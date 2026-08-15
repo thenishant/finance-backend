@@ -1,18 +1,8 @@
-import {gmail_v1, google} from "googleapis";
+import {google} from "googleapis";
 import {prisma} from "../../../database/prisma";
-import {ingestGmailEmail, processGmailMessage} from "./ingestion/transaction.ingestion";
-import {cleanEmailBody} from "./utils/body-cleaner";
-import {SyncGmailDTO} from "./gmail.dto";
+import {processGmailMessage} from "./ingestion/transaction.ingestion";
 
-import {
-    createGmailClient,
-    createGoogleClient,
-    generateGoogleState,
-    getConnectedGmailAccount,
-    GMAIL_QUERY,
-    GOOGLE_SCOPES,
-    verifyGoogleState,
-} from "./gmail.utils";
+import {createGoogleClient, generateGoogleState, GOOGLE_SCOPES, verifyGoogleState,} from "./gmail.utils";
 
 export const disconnectGmail = async (userId: string,) => {
     await prisma.gmailAccount.deleteMany({
@@ -24,54 +14,6 @@ export const disconnectGmail = async (userId: string,) => {
     return {
         disconnected: true,
     };
-};
-
-
-const decodeBase64 = (input?: string | null): string => {
-    if (!input) {
-        return "";
-    }
-
-    return Buffer.from(
-        input.replace(/-/g, "+").replace(/_/g, "/"),
-        "base64"
-    ).toString("utf8");
-};
-
-const extractBody = (
-    payload?: gmail_v1.Schema$MessagePart | null
-): string => {
-    if (!payload) {
-        return "";
-    }
-
-    if (payload.body?.data) {
-        return decodeBase64(payload.body.data);
-    }
-
-    const parts = payload.parts ?? [];
-
-    for (const part of parts) {
-        if (part.mimeType === "text/plain") {
-            return decodeBase64(part.body?.data);
-        }
-    }
-
-    for (const part of parts) {
-        const body = extractBody(part);
-
-        if (body) {
-            return body;
-        }
-    }
-
-    for (const part of parts) {
-        if (part.mimeType === "text/html") {
-            return decodeBase64(part.body?.data);
-        }
-    }
-
-    return "";
 };
 
 export const connectGoogleAccount = async ({
@@ -162,117 +104,6 @@ export const connectGoogleAccount = async ({
         email,
     };
 };
-
-const getHeader = (
-    headers: gmail_v1.Schema$MessagePartHeader[] = [],
-    name: string
-) =>
-    headers.find(
-        h => h.name?.toLowerCase() === name.toLowerCase()
-    )?.value ?? null;
-
-const processMessage = async (
-    gmail: gmail_v1.Gmail,
-    userId: string,
-    messageId: string
-) => {
-    const detail = await gmail.users.messages.get({
-        userId: "me",
-        id: messageId,
-    });
-    const payload = detail.data.payload;
-    const headers = payload?.headers ?? [];
-    const sender = getHeader(headers, "from");
-    const subject = getHeader(headers, "subject");
-    const body = cleanEmailBody(extractBody(payload));
-    const receivedAt = detail.data.internalDate ? new Date(Number(detail.data.internalDate)) : null;
-
-    return ingestGmailEmail({
-        userId,
-        gmailMessageId: messageId,
-        sender,
-        subject,
-        body,
-        receivedAt,
-    });
-};
-
-export const syncMailbox = async (
-    userId: string,
-    options: SyncGmailDTO = {}
-) => {
-    const gmailAccount = await getConnectedGmailAccount(userId);
-
-    console.info("[Gmail] Account", {
-        email: gmailAccount.email,
-        hasAccessToken: !!gmailAccount.accessToken,
-        hasRefreshToken: !!gmailAccount.refreshToken,
-        expiresAt: gmailAccount.expiresAt,
-    });
-
-    const gmail = createGmailClient(gmailAccount.refreshToken);
-
-    let listResponse;
-    try {
-        listResponse = await gmail.users.messages.list({
-            userId: "me",
-            q: GMAIL_QUERY,
-            maxResults: options.maxResults ?? 1,
-            pageToken: options.pageToken,
-        });
-    } catch (error: any) {
-        console.error("[Gmail] API Error", {
-            message: error.message,
-            code: error.code,
-            response: error.response?.data,
-        });
-
-        throw error;
-    }
-
-    const messages = listResponse.data.messages ?? [];
-    const messagesToProcess = messages.filter(
-        (message
-        ): message is gmail_v1.Schema$Message & { id: string } =>
-            !!message.id,
-    );
-    const results: Awaited<ReturnType<typeof processMessage>>[] = [];
-    let index = 0;
-    for (const message of messagesToProcess) {
-        index++;
-        console.info(`[Sync] ${index}/${messagesToProcess.length}`, message.id,);
-        try {
-            const result = await processMessage(gmail, userId, message.id,);
-            results.push(result);
-        } catch (error) {
-            console.error(`[Sync] Failed ${message.id}`, error,
-            );
-        }
-    }
-    const transactionsCreated = results.filter(result => result.status === "created").length;
-    const duplicates = results.filter(result => result.status === "duplicate").length;
-
-    const lastSyncAt = new Date();
-
-    await prisma.gmailAccount.update({
-        where: {
-            id: gmailAccount.id,
-        },
-        data: {
-            lastSyncAt,
-        },
-    });
-
-    return {
-        fetched: messages.length,
-        transactionsCreated,
-        duplicates,
-        query: GMAIL_QUERY,
-        maxResults: options.maxResults ?? 1,
-        nextPageToken: listResponse.data.nextPageToken ?? null,
-        lastSyncAt,
-    };
-}
 
 export const getGoogleUrl = async (userId: string) => {
     const state = generateGoogleState(userId);

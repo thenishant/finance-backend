@@ -2,6 +2,7 @@ import {NextFunction, Request, Response} from "express";
 import {getUserId} from "../../../shared/utils/auth.utils";
 import {syncGmailSchema} from "./gmail.dto";
 import * as gmailService from "./gmail.service";
+import {syncMailbox} from "./gmail.sync";
 
 export const getGoogleUrl = async (
     req: Request,
@@ -67,7 +68,7 @@ export const syncGmail = async (
     try {
         const options = syncGmailSchema.parse(req.body ?? {});
 
-        const result = await gmailService.syncMailbox(
+        const result = await syncMailbox(
             getUserId(req),
             options
         );
