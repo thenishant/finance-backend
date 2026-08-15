@@ -18,8 +18,7 @@ const parseAxisDate = (datePart?: string, timePart?: string,): Date | undefined 
     const [day, month, rawYear] = datePart.split("-").map(Number);
     const [hour, minute, second] = timePart.split(":").map(Number);
     const year = rawYear < 100 ? 2000 + rawYear : rawYear;
-    const date = createISTDate(month - 1, day, hour, minute, second,);
-    return Number.isNaN(date.getTime()) ? undefined : date;
+    return createISTDate(year, month - 1, day, hour, minute, second);
 };
 
 export const parseAxisSubject = (

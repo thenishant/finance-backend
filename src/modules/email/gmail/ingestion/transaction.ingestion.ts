@@ -58,21 +58,20 @@ export const ingestGmailEmail = async (
         new Date();
 
     const fingerprint = createHash("sha256")
-        .update(
-            `${email.userId}|${parsed.type}|${parsed.amount}|${parsed.transactionDate?.toISOString()}|${parsed.merchant}|${parsed.accountLast4}`
-        )
+        .update([email.userId, parsed.type, parsed.amount, date.toISOString(), parsed.merchant ?? "", parsed.accountLast4 ?? ""].join("|"),)
         .digest("hex");
-
     try {
         return await prisma.$transaction(async tx => {
             const existing = await tx.transaction.findFirst({
                 where: {
+                    deletedAt: null,
                     OR: [{
                         gmailMessageId: email.gmailMessageId
-                    }, {
-                        fingerprint
-                    }],
+                    }, {fingerprint,}]
                 },
+                select: {
+                    id: true,
+                }
             });
 
             if (existing) {
@@ -123,7 +122,7 @@ export const ingestGmailEmail = async (
 
                     metadata: {
                         provider,
-                        parserVersion: 1,
+                        parserVersion: 2,
                         accountLast4: parsed.accountLast4 ?? null,
                         accountType:
                             parsed.accountType ??
