@@ -1,5 +1,6 @@
 import {FinancialAccountType, TransactionType,} from "@prisma/client";
 import {ParsedTransaction} from "./types";
+import {createISTDate} from "../../../../date";
 
 const parseAmount = (value?: string): number | null => {
     if (!value) {
@@ -47,7 +48,7 @@ const parseHdfcDate = (
     if (match) {
         const [, day, month, year] = match;
 
-        return new Date(
+        return createISTDate(
             Number(year),
             months[month],
             Number(day),
@@ -66,7 +67,7 @@ const parseHdfcDate = (
     if (match) {
         const [, day, month, year] = match;
 
-        return new Date(
+        return createISTDate(
             2000 + Number(year),
             Number(month) - 1,
             Number(day),
@@ -98,7 +99,7 @@ const parseHdfcDate = (
             second,
         ] = time.split(":").map(Number);
 
-        return new Date(
+        return createISTDate(
             Number(year),
             months[month],
             Number(day),

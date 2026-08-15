@@ -1,5 +1,6 @@
 import {ParsedTransaction} from "./types";
 import {FinancialAccountType, TransactionType} from "@prisma/client";
+import {createISTDate} from "../../../../date";
 
 const parseAmount = (value?: string): number | null => {
     if (!value) {
@@ -17,8 +18,7 @@ const parseAxisDate = (datePart?: string, timePart?: string,): Date | undefined 
     const [day, month, rawYear] = datePart.split("-").map(Number);
     const [hour, minute, second] = timePart.split(":").map(Number);
     const year = rawYear < 100 ? 2000 + rawYear : rawYear;
-    const date = new Date(year, month - 1, day, hour, minute, second,);
-
+    const date = createISTDate(month - 1, day, hour, minute, second,);
     return Number.isNaN(date.getTime()) ? undefined : date;
 };
 
