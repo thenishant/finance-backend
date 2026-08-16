@@ -21,32 +21,54 @@ const processMessage = async (
     gmail: gmail_v1.Gmail,
     userId: string,
     messageId: string,
-): Promise<ProcessResult> => {
+): Promise<Awaited<ReturnType<typeof ingestGmailEmail>>> => {
 
-    const detail =
-        await gmail.users.messages.get({
-            userId: "me",
-            id: messageId,
-        });
+    let lastError: unknown;
 
-    const payload =
-        detail.data.payload;
+    for (let attempt = 1; attempt <= 2; attempt++) {
 
-    const headers =
-        payload?.headers ?? [];
+        try {
 
-    return ingestGmailEmail({
-        userId,
-        gmailMessageId: messageId,
-        sender: getHeader(headers, "from"),
-        subject: getHeader(headers, "subject"),
-        body: cleanEmailBody(
-            extractBody(payload),
-        ),
-        receivedAt:
-            detail.data.internalDate ? new Date(Number(detail.data.internalDate)) : null,
-    });
+            const detail = await gmail.users.messages.get({
+                userId: "me",
+                id: messageId,
+            });
 
+            const payload = detail.data.payload;
+            const headers = payload?.headers ?? [];
+
+            return await ingestGmailEmail({
+                userId,
+                gmailMessageId: messageId,
+                sender: getHeader(headers, "from"),
+                subject: getHeader(headers, "subject"),
+                body: cleanEmailBody(
+                    extractBody(payload),
+                ),
+                receivedAt: detail.data.internalDate
+                    ? new Date(Number(detail.data.internalDate))
+                    : null,
+            });
+
+        } catch (error) {
+
+            lastError = error;
+
+            console.warn(
+                `[Gmail] Message ${messageId} failed (attempt ${attempt}/2)`,
+                error,
+            );
+
+            if (attempt === 1) {
+                await new Promise(resolve =>
+                    setTimeout(resolve, 500),
+                );
+            }
+        }
+
+    }
+
+    throw lastError;
 };
 
 const decodeBase64 = (
@@ -118,39 +140,6 @@ const getHeader = (
             name.toLowerCase(),
     )?.value ?? null;
 
-const getSyncStats = (
-    results: ProcessResult[],
-) => {
-
-    const stats = {
-        transactionsCreated: 0,
-        duplicates: 0,
-        skipped: 0,
-    };
-
-    for (const result of results) {
-
-        switch (result.status) {
-
-            case "created":
-                stats.transactionsCreated++;
-                break;
-
-            case "duplicate":
-                stats.duplicates++;
-                break;
-
-            default:
-                stats.skipped++;
-        }
-
-    }
-
-    return stats;
-
-};
-
-
 const saveCheckpoint = async (
     gmailAccountId: string,
     historyId: string,
@@ -179,12 +168,7 @@ class GmailHistoryExpiredError extends Error {
     }
 }
 
-type GmailAccount =
-    Awaited<ReturnType<typeof getConnectedGmailAccount>>;
-
-type ProcessResult =
-    Awaited<ReturnType<typeof ingestGmailEmail>>;
-
+type GmailAccount = Awaited<ReturnType<typeof getConnectedGmailAccount>>;
 
 export const performInitialSync = async (
     gmail: gmail_v1.Gmail,
@@ -222,7 +206,9 @@ export const performInitialSync = async (
         } => Boolean(message.id),
     );
 
-    const results: ProcessResult[] = [];
+    let transactionsCreated = 0;
+    let duplicates = 0;
+    let skipped = 0;
 
     for (const [index, message] of messages.entries()) {
 
@@ -231,19 +217,40 @@ export const performInitialSync = async (
         );
 
         try {
-            results.push(
-                await processMessage(
-                    gmail,
-                    userId,
-                    message.id,
-                ),
+
+            const result = await processMessage(
+                gmail,
+                userId,
+                message.id,
             );
+
+            switch (result.status) {
+
+                case "created":
+                    transactionsCreated++;
+                    break;
+
+                case "duplicate":
+                    duplicates++;
+                    break;
+
+                default:
+                    skipped++;
+                    break;
+
+            }
+
         } catch (error) {
+
             console.error(
                 `[Initial] Failed ${message.id}`,
                 error,
             );
+
+            skipped++;
+
         }
+
     }
 
     //
@@ -270,7 +277,9 @@ export const performInitialSync = async (
         fetched: messages.length,
         nextPageToken: response.nextPageToken ?? null,
         lastSyncAt,
-        ...getSyncStats(results),
+        transactionsCreated,
+        duplicates,
+        skipped,
     };
 };
 
@@ -344,7 +353,9 @@ export const performIncrementalSync = async (
         newMessages: messageIds.size,
     });
 
-    const results: ProcessResult[] = [];
+    let transactionsCreated = 0;
+    let duplicates = 0;
+    let skipped = 0;
 
     let index = 0;
 
@@ -358,23 +369,33 @@ export const performIncrementalSync = async (
 
         try {
 
-            results.push(
-                await processMessage(
-                    gmail,
-                    userId,
-                    messageId,
-                ),
+            const result = await processMessage(
+                gmail,
+                userId,
+                messageId,
             );
 
-        } catch (error) {
+            switch (result.status) {
 
+                case "created":
+                    transactionsCreated++;
+                    break;
+
+                case "duplicate":
+                    duplicates++;
+                    break;
+
+                default:
+                    skipped++;
+                    break;
+            }
+        } catch (error) {
             console.error(
                 `[Incremental] Failed ${messageId}`,
                 error,
             );
-
+            skipped++;
         }
-
     }
 
     const lastSyncAt =
@@ -387,7 +408,9 @@ export const performIncrementalSync = async (
         fetched: messageIds.size,
         nextPageToken: null,
         lastSyncAt,
-        ...getSyncStats(results),
+        transactionsCreated,
+        duplicates,
+        skipped,
     };
 };
 

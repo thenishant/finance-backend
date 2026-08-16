@@ -479,7 +479,30 @@ export const resolveTransactionMerchant = async ({
         };
     }
 
-    const resolvedMerchant = await resolveMerchant(raw);
+    let resolvedMerchant: MerchantResolveResult | null = null;
+
+    try {
+
+        resolvedMerchant = await resolveMerchant(raw);
+
+    } catch (error) {
+
+        console.error("[Merchant] Failed to resolve merchant", {
+            merchant: raw,
+            error,
+        });
+
+        return {
+            merchant: null,
+            merchantId: null,
+            merchantRaw: raw,
+            category: null,
+            categoryId: null,
+            categoryAssignmentSource: CategoryAssignmentSource.USER,
+            confidence: null,
+        };
+
+    }
 
     if (!shouldCategorize) {
         return {
@@ -488,23 +511,47 @@ export const resolveTransactionMerchant = async ({
             merchantRaw: raw,
             category: null,
             categoryId: null,
-            categoryAssignmentSource:
-            CategoryAssignmentSource.USER,
-            confidence: null,
+            categoryAssignmentSource: CategoryAssignmentSource.USER,
+            confidence: resolvedMerchant.confidence,
         };
     }
 
-    const categorization =
-        await categorizeMerchant({userId, merchant: resolvedMerchant.merchant, transactionType,});
+    try {
 
-    return {
-        merchant: resolvedMerchant.merchant,
-        merchantId: resolvedMerchant.merchant.id,
-        merchantRaw: raw,
-        category: categorization.category,
-        categoryId: categorization.category.id,
-        categoryAssignmentSource:
-        categorization.categoryAssignmentSource,
-        confidence: categorization.confidence,
-    };
+        const categorization = await categorizeMerchant({
+            userId,
+            merchant: resolvedMerchant.merchant,
+            transactionType,
+        });
+
+        return {
+            merchant: resolvedMerchant.merchant,
+            merchantId: resolvedMerchant.merchant.id,
+            merchantRaw: raw,
+            category: categorization.category,
+            categoryId: categorization.category.id,
+            categoryAssignmentSource:
+            categorization.categoryAssignmentSource,
+            confidence: categorization.confidence,
+        };
+
+    } catch (error) {
+
+        console.error("[Merchant] Failed to categorize merchant", {
+            merchant: resolvedMerchant.merchant.name,
+            error,
+        });
+
+        return {
+            merchant: resolvedMerchant.merchant,
+            merchantId: resolvedMerchant.merchant.id,
+            merchantRaw: raw,
+            category: null,
+            categoryId: null,
+            categoryAssignmentSource: CategoryAssignmentSource.USER,
+            confidence: resolvedMerchant.confidence,
+        };
+
+    }
+
 };

@@ -114,7 +114,10 @@ export const resolveMerchantWithAI = async (
     }
 
     if (!result.merchant) {
-        throw new Error("AI did not return a merchant.");
+        return {
+            merchant: merchantName,
+            confidence: 0,
+        };
     }
 
     if (typeof result.confidence !== "number") {
