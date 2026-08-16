@@ -120,6 +120,28 @@ export const purgeStoredEmails = async (
     }
 };
 
+export const startWatch = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+) => {
+
+    try {
+
+        await gmailService.startWatch(
+            getUserId(req),
+        );
+
+        res.json({
+            success: true,
+        });
+
+    } catch (error) {
+        next(error);
+    }
+
+};
+
 export const disconnectGmail = async (
     req: Request,
     res: Response,

@@ -15,6 +15,8 @@ export interface GmailSyncStats {
     lastSyncAt: Date;
 }
 
+const activeSyncs = new Set<string>();
+
 const processMessage = async (
     gmail: gmail_v1.Gmail,
     userId: string,
@@ -184,7 +186,7 @@ type ProcessResult =
     Awaited<ReturnType<typeof ingestGmailEmail>>;
 
 
-const performInitialSync = async (
+export const performInitialSync = async (
     gmail: gmail_v1.Gmail,
     gmailAccount: GmailAccount,
     userId: string,
@@ -272,7 +274,7 @@ const performInitialSync = async (
     };
 };
 
-const performIncrementalSync = async (
+export const performIncrementalSync = async (
     gmail: gmail_v1.Gmail,
     gmailAccount: GmailAccount,
     userId: string,
@@ -394,55 +396,84 @@ export const syncMailbox = async (
     options: SyncGmailDTO = {},
 ): Promise<GmailSyncStats> => {
 
-    const gmailAccount =
-        await getConnectedGmailAccount(
-            userId,
-        );
+    if (activeSyncs.has(userId)) {
 
-    const gmail =
-        createGmailClient(
-            gmailAccount.refreshToken,
-        );
+        console.info("[Gmail] Sync already running", {
+            userId,
+        });
+
+        return {
+            fetched: 0,
+            transactionsCreated: 0,
+            duplicates: 0,
+            skipped: 0,
+            nextPageToken: null,
+            lastSyncAt: new Date(),
+        };
+
+    }
+
+    activeSyncs.add(userId);
+
     try {
 
-        if (gmailAccount.historyId) {
+        const gmailAccount =
+            await getConnectedGmailAccount(userId);
 
-            return performIncrementalSync(
-                gmail,
-                gmailAccount,
-                userId,
-            );
+        console.info("[Gmail] Sync", {
+            email: gmailAccount.email,
+            historyId: gmailAccount.historyId,
+        });
 
-        }
-
-        return performInitialSync(
-            gmail,
-            gmailAccount,
-            userId,
-            options,
+        const gmail = createGmailClient(
+            gmailAccount.refreshToken,
         );
 
-    } catch (error) {
+        try {
 
-        if (
-            error instanceof
-            GmailHistoryExpiredError
-        ) {
+            if (gmailAccount.historyId) {
 
-            console.warn(
-                "[Gmail] History expired. Running initial sync.",
-            );
+                return await performIncrementalSync(
+                    gmail,
+                    gmailAccount,
+                    userId,
+                );
 
-            return performInitialSync(
+            }
+
+            return await performInitialSync(
                 gmail,
                 gmailAccount,
                 userId,
                 options,
             );
 
+        } catch (error) {
+
+            if (
+                error instanceof GmailHistoryExpiredError
+            ) {
+
+                console.warn(
+                    "[Gmail] History expired. Running initial sync.",
+                );
+
+                return await performInitialSync(
+                    gmail,
+                    gmailAccount,
+                    userId,
+                    options,
+                );
+
+            }
+
+            throw error;
+
         }
 
-        throw error;
+    } finally {
+
+        activeSyncs.delete(userId);
 
     }
 

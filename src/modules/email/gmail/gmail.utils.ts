@@ -39,38 +39,20 @@ export const createGoogleClient = () => {
 
 export const createGmailClient = (refreshToken: string,): gmail_v1.Gmail => {
     console.info("[Gmail] Creating client", {
-        hasRefreshToken: !!refreshToken,
-        refreshTokenPrefix: refreshToken?.slice(0, 12),
-        refreshTokenLength: refreshToken?.length,
+        hasRefreshToken: Boolean(refreshToken),
     });
 
     const client = createGoogleClient();
+
     client.setCredentials({
         refresh_token: refreshToken,
-    });
-
-    console.info("[Google] Credentials set", {
-        credentials: {
-            hasRefreshToken: !!client.credentials.refresh_token,
-            hasAccessToken: !!client.credentials.access_token,
-        },
-    });
-
-    client.on("tokens", (tokens) => {
-        console.info("[Google] Tokens refreshed", {
-            hasAccessToken: !!tokens.access_token,
-            hasRefreshToken: !!tokens.refresh_token,
-            expiry: tokens.expiry_date,
-        });
-
-        // Optional:
-        // Persist new access token / refresh token here if Google rotates them.
     });
 
     return google.gmail({
         version: "v1",
         auth: client,
     });
+
 };
 
 export const getConnectedGmailAccount = async (userId: string,) => {

@@ -2,7 +2,14 @@ import {google} from "googleapis";
 import {prisma} from "../../../database/prisma";
 import {processGmailMessage} from "./ingestion/transaction.ingestion";
 
-import {createGoogleClient, generateGoogleState, GOOGLE_SCOPES, verifyGoogleState,} from "./gmail.utils";
+import {
+    createGoogleClient,
+    generateGoogleState,
+    getConnectedGmailAccount,
+    GOOGLE_SCOPES,
+    verifyGoogleState,
+} from "./gmail.utils";
+import {startGmailWatch} from "./watch/watch.service";
 
 export const disconnectGmail = async (userId: string,) => {
     await prisma.gmailAccount.deleteMany({
@@ -89,16 +96,19 @@ export const connectGoogleAccount = async ({
         accessToken: !!account.accessToken,
     });
 
-    await prisma.gmailAccount.upsert({
-        where: {
-            userId: payload.userId,
-        },
-        update: account,
-        create: {
-            userId: payload.userId,
-            ...account,
-        },
-    });
+    const gmailAccount =
+        await prisma.gmailAccount.upsert({
+            where: {
+                userId: payload.userId,
+            },
+            update: account,
+            create: {
+                userId: payload.userId,
+                ...account,
+            },
+        });
+
+    await startGmailWatch(gmailAccount);
 
     return {
         email,
@@ -164,4 +174,14 @@ export const purgeStoredEmails = async (userId: string) => {
     return {
         deleted: result.count,
     };
+};
+
+export const startWatch = async (
+    userId: string,
+) => {
+
+    const account =
+        await getConnectedGmailAccount(userId);
+
+    await startGmailWatch(account);
 };
