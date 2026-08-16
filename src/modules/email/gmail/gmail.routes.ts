@@ -7,19 +7,25 @@ import {
     processExistingEmails,
     purgeStoredEmails,
     startWatch,
-    syncGmail
+    syncGmail,
 } from "./gmail.controller";
 import {authenticate} from "../../../shared/middleware/auth.middleware";
 import {gmailWebhook} from "./webhook/webhook.controller";
 
 const router = Router();
-router.get("/url", authenticate, getGoogleUrl);
+
+// Public routes
 router.get("/callback", googleCallback);
-router.get("/status", authenticate, getGmailStatus);
-router.post("/sync", authenticate, syncGmail);
-router.post("/process-existing", authenticate, processExistingEmails);
-router.delete("/stored-messages", authenticate, purgeStoredEmails);
-router.delete("/disconnect", authenticate, disconnectGmail);
-router.post("/watch", authenticate, startWatch);
-router.post("/webhook", authenticate, gmailWebhook);
+router.post("/webhook", gmailWebhook);
+
+// Protected routes
+router.use(authenticate);
+router.get("/url", getGoogleUrl);
+router.get("/status", getGmailStatus);
+router.post("/sync", syncGmail);
+router.post("/process-existing", processExistingEmails);
+router.delete("/stored-messages", purgeStoredEmails);
+router.delete("/disconnect", disconnectGmail);
+router.post("/watch", startWatch);
+
 export default router;

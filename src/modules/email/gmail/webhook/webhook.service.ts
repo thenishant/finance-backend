@@ -17,6 +17,11 @@ export const handleGmailWebhook = async (
     payload: PubSubEnvelope,
 ): Promise<void> => {
 
+    if (!payload) {
+        console.warn("[Webhook] Empty payload");
+        return;
+    }
+
     const encoded = payload.message?.data;
 
     if (!encoded) {
