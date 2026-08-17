@@ -414,17 +414,9 @@ export const performIncrementalSync = async (
     };
 };
 
-export const syncMailbox = async (
-    userId: string,
-    options: SyncGmailDTO = {},
-): Promise<GmailSyncStats> => {
-
+export const syncMailbox = async (userId: string, options: SyncGmailDTO = {}): Promise<GmailSyncStats> => {
     if (activeSyncs.has(userId)) {
-
-        console.info("[Gmail] Sync already running", {
-            userId,
-        });
-
+        console.info("[Gmail] Sync already running", {userId});
         return {
             fetched: 0,
             transactionsCreated: 0,
@@ -433,71 +425,60 @@ export const syncMailbox = async (
             nextPageToken: null,
             lastSyncAt: new Date(),
         };
-
     }
 
     activeSyncs.add(userId);
-
     try {
-
-        const gmailAccount =
-            await getConnectedGmailAccount(userId);
-
+        const gmailAccount = await getConnectedGmailAccount(userId);
         console.info("[Gmail] Sync", {
             email: gmailAccount.email,
             historyId: gmailAccount.historyId,
         });
 
-        const gmail = createGmailClient(
-            gmailAccount.refreshToken,
-        );
+        const gmail = createGmailClient(gmailAccount.refreshToken,);
 
         try {
 
             if (gmailAccount.historyId) {
+                return await performIncrementalSync(gmail, gmailAccount, userId,);
+            }
+            return await performInitialSync(gmail, gmailAccount, userId, options,);
 
-                return await performIncrementalSync(
-                    gmail,
-                    gmailAccount,
-                    userId,
-                );
-
+        } catch (error: any) {
+            if (error instanceof GmailHistoryExpiredError) {
+                console.warn("[Gmail] History expired. Running initial sync.",);
+                return await performInitialSync(gmail, gmailAccount, userId, options,);
             }
 
-            return await performInitialSync(
-                gmail,
-                gmailAccount,
-                userId,
-                options,
-            );
-
-        } catch (error) {
+            const status = error?.code ?? error?.response?.status;
+            const message = String(error?.message ?? "",).toLowerCase();
+            const reason = String(error?.response?.data?.error ?? "",).toLowerCase();
 
             if (
-                error instanceof GmailHistoryExpiredError
+                status === 401 ||
+                status === 403 ||
+                message.includes("invalid_grant") ||
+                reason.includes("invalid_grant")
             ) {
 
-                console.warn(
-                    "[Gmail] History expired. Running initial sync.",
+                console.error("[Google] Gmail authorization revoked", {
+                        email: gmailAccount.email,
+                    },
                 );
-
-                return await performInitialSync(
-                    gmail,
-                    gmailAccount,
-                    userId,
-                    options,
-                );
-
+                await prisma.gmailAccount.update({
+                    where: {
+                        id: gmailAccount.id,
+                    },
+                    data: {
+                        accessToken: null,
+                        expiresAt: null,
+                        watchExpiresAt: null,
+                    },
+                });
             }
-
             throw error;
-
         }
-
     } finally {
-
         activeSyncs.delete(userId);
-
     }
-
 };

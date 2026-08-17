@@ -3,6 +3,8 @@ import {getUserId} from "../../../shared/utils/auth.utils";
 import {syncGmailSchema} from "./gmail.dto";
 import * as gmailService from "./gmail.service";
 import {syncMailbox} from "./gmail.sync";
+import {createGmailClient} from "./gmail.utils";
+import {prisma} from "../../../database/prisma";
 
 export const getGoogleUrl = async (
     req: Request,
@@ -142,21 +144,37 @@ export const startWatch = async (
 
 };
 
-export const disconnectGmail = async (
-    req: Request,
-    res: Response,
-    next: NextFunction,
-) => {
-    try {
-        const result = await gmailService.disconnectGmail(
-            getUserId(req),
-        );
-
-        return res.json({
-            success: true,
-            data: result,
+export const disconnectGmail = async (userId: string) => {
+    const account =
+        await prisma.gmailAccount.findUnique({
+            where: {
+                userId,
+            },
         });
-    } catch (error) {
-        next(error);
+
+    if (!account) {
+        return {
+            disconnected: true,
+        };
     }
+
+    try {
+        const gmail = createGmailClient(account.refreshToken);
+        await gmail.users.stop({userId: "me"});
+        console.info("[Gmail] Watch stopped", {email: account.email,});
+
+    } catch (error) {
+        console.warn("[Gmail] Failed to stop watch", error);
+    }
+
+    await prisma.gmailAccount.delete({
+        where: {
+            id: account.id,
+        },
+    });
+
+    return {
+        disconnected: true,
+    };
+
 };
