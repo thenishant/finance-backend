@@ -178,3 +178,29 @@ export const disconnectGmail = async (userId: string) => {
     };
 
 };
+
+export const getRecentImports = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+) => {
+
+    try {
+
+        const result =
+            await gmailService.getRecentImports(
+                getUserId(req),
+            );
+
+        res.json({
+            success: true,
+            data: result,
+        });
+
+    } catch (error) {
+
+        next(error);
+
+    }
+
+};

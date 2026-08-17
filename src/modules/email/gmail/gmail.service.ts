@@ -10,6 +10,55 @@ import {
     verifyGoogleState,
 } from "./gmail.utils";
 import {startGmailWatch} from "./watch/watch.service";
+import {RecentImportDTO} from "./gmail.dto";
+
+export const getRecentImports = async (
+    userId: string,
+): Promise<RecentImportDTO[]> => {
+
+    const transactions =
+        await prisma.transaction.findMany({
+
+            where: {
+                userId,
+                source: "GMAIL",
+            },
+
+            include: {
+                merchant: true,
+                category: true,
+            },
+
+            orderBy: {
+                date: "desc",
+            },
+
+            take: 5,
+
+        });
+
+    return transactions.map(transaction => ({
+
+        id: transaction.id,
+
+        merchant:
+            transaction.merchant?.name ??
+            transaction.merchantRaw ??
+            "Unknown Merchant",
+
+        category:
+            transaction.category?.name ??
+            null,
+
+        amount:
+            Number(transaction.amount),
+
+        date:
+            transaction.date.toISOString(),
+
+    }));
+
+};
 
 export const disconnectGmail = async (userId: string,) => {
     await prisma.gmailAccount.deleteMany({

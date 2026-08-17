@@ -5,4 +5,12 @@ export const syncGmailSchema = z.object({
     pageToken: z.string().trim().min(1).optional()
 });
 
+export interface RecentImportDTO {
+    id: string;
+    merchant: string;
+    category: string | null;
+    amount: number;
+    date: string;
+}
+
 export type SyncGmailDTO = z.infer<typeof syncGmailSchema>;
