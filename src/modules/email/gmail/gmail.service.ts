@@ -127,16 +127,44 @@ export const getGoogleUrl = async (userId: string) => {
     return {url};
 };
 
-export const getStatus = async (userId: string) => {
-    const account = await prisma.gmailAccount.findUnique({
-        where: {userId},
-    });
+export const getStatus = async (
+    userId: string,
+) => {
+
+    const account =
+        await prisma.gmailAccount.findUnique({
+            where: {
+                userId,
+            },
+        });
+
+    if (!account) {
+        return {
+            connected: false,
+            email: null,
+            lastSyncAt: null,
+            watchExpiresAt: null,
+            watchActive: false,
+            autoImportEnabled: false,
+        };
+    }
 
     return {
-        connected: !!account,
-        email: account?.email ?? null,
-        lastSyncAt: account?.lastSyncAt ?? null,
+        connected: true,
+        email: account.email,
+        lastSyncAt: account.lastSyncAt,
+        watchExpiresAt: account.watchExpiresAt,
+        watchActive:
+            account.watchExpiresAt !== null &&
+            account.watchExpiresAt > new Date(),
+        watchStatus:
+            account.watchExpiresAt !== null &&
+            account.watchExpiresAt > new Date()
+                ? "ACTIVE"
+                : "EXPIRED",
+        autoImportEnabled: true,
     };
+
 };
 
 export const processExistingEmails = async (userId: string) => {
