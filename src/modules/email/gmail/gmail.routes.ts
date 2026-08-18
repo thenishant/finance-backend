@@ -27,6 +27,6 @@ router.post("/process-existing", processExistingEmails);
 router.delete("/stored-messages", purgeStoredEmails);
 router.delete("/disconnect", disconnectGmail);
 router.post("/watch", startWatch);
-router.post("/recentImport", getRecentImports);
+router.get("/recentImport", getRecentImports);
 
 export default router;
