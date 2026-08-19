@@ -2,7 +2,8 @@ import {Router} from "express";
 import {
     disconnectGmail,
     getGmailStatus,
-    getGoogleUrl, getRecentImports,
+    getGoogleUrl,
+    getRecentImports,
     googleCallback,
     processExistingEmails,
     purgeStoredEmails,
@@ -20,7 +21,7 @@ router.post("/webhook", gmailWebhook);
 
 // Protected routes
 router.use(authenticate);
-router.get("/url", getGoogleUrl);
+router.post("/connect", getGoogleUrl);
 router.get("/status", getGmailStatus);
 router.post("/sync", syncGmail);
 router.post("/process-existing", processExistingEmails);

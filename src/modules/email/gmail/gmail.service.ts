@@ -240,13 +240,8 @@ export const connectGoogleAccount = async ({
 export const getGoogleUrl = async (
     userId: string,
 ) => {
-
-    const state =
-        generateGoogleState(userId);
-
-    const client =
-        createGoogleClient();
-
+    const state = generateGoogleState(userId);
+    const client = createGoogleClient();
     return {
         url: client.generateAuthUrl({
             access_type: "offline",
