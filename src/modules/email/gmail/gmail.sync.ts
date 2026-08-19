@@ -5,6 +5,7 @@ import {ingestGmailEmail} from "./ingestion/transaction.ingestion";
 import {createGmailClient, getConnectedGmailAccount, GMAIL_QUERY,} from "./gmail.utils";
 import {SyncGmailDTO} from "./gmail.dto";
 import {cleanEmailBody} from "./utils/body-cleaner";
+import {GmailReconnectRequiredError} from "../../../error/GmailReconnectRequiredError";
 
 export interface GmailSyncStats {
     fetched: number;
@@ -252,7 +253,9 @@ const handleAuthorizationError = async (
     error: unknown,
 ): Promise<never> => {
 
-    if (!isAuthorizationError(error)) {
+    if (
+        !isAuthorizationError(error)
+    ) {
         throw error;
     }
 
@@ -269,14 +272,7 @@ const handleAuthorizationError = async (
         },
     });
 
-    throw Object.assign(
-        new Error(
-            "Gmail authorization has expired. Please reconnect your Gmail account.",
-        ),
-        {
-            cause: error,
-        },
-    );
+    throw new GmailReconnectRequiredError();
 
 };
 
@@ -468,9 +464,6 @@ export const performIncrementalSync = async (
                                 userId: "me",
                                 startHistoryId:
                                     gmailAccount.historyId!,
-                                historyTypes: [
-                                    "messageAdded",
-                                ],
                                 pageToken,
                             })
                         ).data,
@@ -484,15 +477,10 @@ export const performIncrementalSync = async (
             for (const history of response.history ?? []) {
 
                 for (const added of history.messagesAdded ?? []) {
-
                     if (added.message?.id) {
-                        messageIds.add(
-                            added.message.id,
-                        );
+                        messageIds.add(added.message.id);
                     }
-
                 }
-
             }
 
             pageToken =

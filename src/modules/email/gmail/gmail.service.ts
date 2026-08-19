@@ -240,9 +240,23 @@ export const connectGoogleAccount = async ({
 export const getGoogleUrl = async (
     userId: string,
 ) => {
+    const account = await prisma.gmailAccount.findUnique({
+        where: {
+            userId,
+        }
+    });
+
+    if (account?.refreshToken && account.email) {
+        return {
+            connected: true,
+            email: account.email,
+        };
+    }
+
     const state = generateGoogleState(userId);
     const client = createGoogleClient();
     return {
+        connected: false,
         url: client.generateAuthUrl({
             access_type: "offline",
             prompt: "consent",

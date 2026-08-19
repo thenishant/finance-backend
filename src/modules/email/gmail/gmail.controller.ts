@@ -3,8 +3,7 @@ import {getUserId} from "../../../shared/utils/auth.utils";
 import {syncGmailSchema} from "./gmail.dto";
 import * as gmailService from "./gmail.service";
 import {syncMailbox} from "./gmail.sync";
-import {createGmailClient} from "./gmail.utils";
-import {prisma} from "../../../database/prisma";
+import {GmailReconnectRequiredError} from "../../../error/GmailReconnectRequiredError";
 
 export const getGoogleUrl = async (
     req: Request,
@@ -19,6 +18,15 @@ export const getGoogleUrl = async (
             data: result,
         });
     } catch (error) {
+
+        if (error instanceof GmailReconnectRequiredError) {
+            return res.status(401).json({
+                success: false,
+                code: "GMAIL_RECONNECT_REQUIRED",
+                message: "Please reconnect your Gmail account.",
+            });
+        }
+
         next(error);
     }
 };
@@ -65,23 +73,43 @@ export const getGmailStatus = async (
 export const syncGmail = async (
     req: Request,
     res: Response,
-    next: NextFunction
+    next: NextFunction,
 ) => {
+
     try {
-        const options = syncGmailSchema.parse(req.body ?? {});
+
+        const options = syncGmailSchema.parse(
+            req.body ?? {},
+        );
 
         const result = await syncMailbox(
             getUserId(req),
-            options
+            options,
         );
 
         return res.json({
             success: true,
             data: result,
         });
+
     } catch (error) {
+
+        if (
+            error instanceof GmailReconnectRequiredError
+        ) {
+
+            return res.status(401).json({
+                success: false,
+                code: "GMAIL_RECONNECT_REQUIRED",
+                message: "Please reconnect your Gmail account.",
+            });
+
+        }
+
         next(error);
+
     }
+
 };
 
 export const processExistingEmails = async (
@@ -144,38 +172,29 @@ export const startWatch = async (
 
 };
 
-export const disconnectGmail = async (userId: string) => {
-    const account =
-        await prisma.gmailAccount.findUnique({
-            where: {
-                userId,
-            },
-        });
-
-    if (!account) {
-        return {
-            disconnected: true,
-        };
-    }
+export const disconnectGmail = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+) => {
 
     try {
-        const gmail = createGmailClient(account.refreshToken);
-        await gmail.users.stop({userId: "me"});
-        console.info("[Gmail] Watch stopped", {email: account.email,});
+
+        const result =
+            await gmailService.disconnectGmail(
+                getUserId(req),
+            );
+
+        res.json({
+            success: true,
+            data: result,
+        });
 
     } catch (error) {
-        console.warn("[Gmail] Failed to stop watch", error);
+
+        next(error);
+
     }
-
-    await prisma.gmailAccount.delete({
-        where: {
-            id: account.id,
-        },
-    });
-
-    return {
-        disconnected: true,
-    };
 
 };
 
