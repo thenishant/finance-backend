@@ -538,7 +538,7 @@ export const getDashboard = async (
 
     const recent = recentTransactions.map(transaction => ({
         id: transaction.id,
-        amount: transaction.amount.toString(),
+        amount: Number(transaction.amount),
         type: transaction.type,
         merchant: transaction.merchant,
         date: transaction.date,
