@@ -289,7 +289,7 @@ export const resolveTransactionUpdate = async ({
 
     let merchantId = existing.merchantId;
     let merchantRaw = existing.merchantRaw;
-
+    let merchantNormalized = existing.merchantNormalized;
     let categoryId = data.categoryId ?? existing.categoryId;
     let categoryAssignmentSource = existing.categoryAssignmentSource;
     let aiCategoryConfidence = existing.aiCategoryConfidence;
@@ -313,6 +313,7 @@ export const resolveTransactionUpdate = async ({
                 categoryId,
                 categoryAssignmentSource,
                 aiCategoryConfidence,
+                merchantNormalized
             };
         }
 
@@ -334,7 +335,7 @@ export const resolveTransactionUpdate = async ({
 
         merchantId = merchant.merchantId;
         merchantRaw = merchant.merchantRaw;
-
+        merchantNormalized = merchant.merchantNormalized;
         if (merchant.categoryId) {
             categoryId = merchant.categoryId;
             categoryAssignmentSource =
@@ -353,6 +354,7 @@ export const resolveTransactionUpdate = async ({
         merchantId,
         merchantRaw,
         categoryId,
+        merchantNormalized,
         categoryAssignmentSource,
         aiCategoryConfidence,
     };

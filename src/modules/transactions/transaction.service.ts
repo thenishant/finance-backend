@@ -125,25 +125,14 @@ export const createTransaction = async (
                 date,
                 year,
                 month,
-
                 merchantId: merchant.merchantId,
                 merchantRaw: merchant.merchantRaw,
-
-                categoryId:
-                    data.type === TransactionType.TRANSFER
-                        ? null
-                        : categoryId,
-
-                categoryAssignmentSource:
-                    data.type === TransactionType.TRANSFER
-                        ? CategoryAssignmentSource.USER
-                        : categoryAssignmentSource,
-
+                merchantNormalized: merchant.merchantNormalized,
+                categoryId: data.type === TransactionType.TRANSFER ? null : categoryId,
+                categoryAssignmentSource: data.type === TransactionType.TRANSFER ? CategoryAssignmentSource.USER : categoryAssignmentSource,
                 aiCategoryConfidence,
-
                 sourceAccountId,
                 destinationAccountId,
-
                 note: data.note ?? null,
                 idempotencyKey: data.idempotencyKey ?? null,
             },
@@ -398,7 +387,7 @@ export const updateTransaction = async (
 
                 merchantId: merchant.merchantId,
                 merchantRaw: merchant.merchantRaw,
-
+                merchantNormalized: merchant.merchantNormalized,
                 categoryId:
                     data.type === TransactionType.TRANSFER
                         ? null

@@ -12,7 +12,7 @@ import {
     CategorizeMerchantInput,
     MerchantCategorizationResult,
     MerchantCategoryOption,
-    MerchantResolveResult,
+    MerchantResolution,
     ResolveTransactionMerchantResult,
 } from "./merchant.types";
 
@@ -26,8 +26,7 @@ import {normalizeMerchantName} from "./merchant.normalizer";
  * Deduplicates concurrent merchant resolution requests within this Node process.
  * Prevents multiple AI calls when many emails for the same merchant arrive together.
  */
-const resolvingMerchants = new Map<string, Promise<MerchantResolveResult>>();
-
+const resolvingMerchants = new Map<string, Promise<MerchantResolution>>();
 /**
  * Deduplicates concurrent merchant categorization requests.
  */
@@ -192,7 +191,7 @@ export const addAliasIfMissing = (
 
 export const resolveMerchant = async (
     merchantName: string,
-): Promise<MerchantResolveResult> => {
+): Promise<MerchantResolution> => {
 
     const normalizedName =
         normalizeMerchantName(merchantName);
@@ -212,7 +211,7 @@ export const resolveMerchant = async (
         return existing;
     }
 
-    const promise = (async (): Promise<MerchantResolveResult> => {
+    const promise = (async (): Promise<MerchantResolution> => {
 
         console.info("[Merchant] Resolving", {
             merchant: merchantName,
@@ -340,7 +339,7 @@ export const categorizeMerchant = async ({
                 fromCache: true,
                 categoryAssignmentSource: latestMapping.source === MerchantMappingSource.USER
                     ? CategoryAssignmentSource.USER
-                    : CategoryAssignmentSource.AI_EXISTING,
+                    : CategoryAssignmentSource.LEARNED,
             };
         }
 
@@ -383,7 +382,7 @@ export const categorizeMerchant = async ({
             reasoning: aiResult.reasoning,
             fromCache: false,
             categoryAssignmentSource:
-            CategoryAssignmentSource.AI_NEW,
+            CategoryAssignmentSource.AI,
         };
 
     })();
@@ -472,14 +471,15 @@ export const resolveTransactionMerchant = async ({
             merchant: null,
             merchantId: null,
             merchantRaw: null,
+            merchantNormalized: null,
             category: null,
             categoryId: null,
-            categoryAssignmentSource: CategoryAssignmentSource.USER,
+            categoryAssignmentSource: CategoryAssignmentSource.NONE,
             confidence: null,
         };
     }
 
-    let resolvedMerchant: MerchantResolveResult | null = null;
+    let resolvedMerchant: MerchantResolution | null = null;
 
     try {
 
@@ -498,6 +498,7 @@ export const resolveTransactionMerchant = async ({
             merchantRaw: raw,
             category: null,
             categoryId: null,
+            merchantNormalized: normalizeMerchantName(raw),
             categoryAssignmentSource: CategoryAssignmentSource.USER,
             confidence: null,
         };
@@ -509,9 +510,10 @@ export const resolveTransactionMerchant = async ({
             merchant: resolvedMerchant.merchant,
             merchantId: resolvedMerchant.merchant.id,
             merchantRaw: raw,
+            merchantNormalized: resolvedMerchant.normalizedName,
             category: null,
             categoryId: null,
-            categoryAssignmentSource: CategoryAssignmentSource.USER,
+            categoryAssignmentSource: CategoryAssignmentSource.NONE,
             confidence: resolvedMerchant.confidence,
         };
     }
@@ -530,9 +532,9 @@ export const resolveTransactionMerchant = async ({
             merchantRaw: raw,
             category: categorization.category,
             categoryId: categorization.category.id,
-            categoryAssignmentSource:
-            categorization.categoryAssignmentSource,
+            categoryAssignmentSource: categorization.categoryAssignmentSource,
             confidence: categorization.confidence,
+            merchantNormalized: resolvedMerchant.normalizedName,
         };
 
     } catch (error) {
@@ -546,12 +548,12 @@ export const resolveTransactionMerchant = async ({
             merchant: resolvedMerchant.merchant,
             merchantId: resolvedMerchant.merchant.id,
             merchantRaw: raw,
+            merchantNormalized: resolvedMerchant.normalizedName,
             category: null,
             categoryId: null,
-            categoryAssignmentSource: CategoryAssignmentSource.USER,
+            categoryAssignmentSource: CategoryAssignmentSource.NONE,
             confidence: resolvedMerchant.confidence,
         };
-
     }
 
 };

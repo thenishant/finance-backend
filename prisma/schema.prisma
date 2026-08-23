@@ -236,8 +236,9 @@ model MerchantAlias {
 
 enum CategoryAssignmentSource {
   USER
-  AI_EXISTING
-  AI_NEW
+  LEARNED
+  AI
+  NONE
 }
 
 enum MerchantMappingSource {

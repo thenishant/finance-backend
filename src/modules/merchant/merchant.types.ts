@@ -10,7 +10,7 @@ export interface MerchantAIResponse {
     confidence: number;
 }
 
-export interface MerchantResolveResult {
+export interface MerchantResolution {
     merchant: Merchant;
     normalizedName: string;
     confidence: number;
@@ -66,6 +66,7 @@ export interface ResolveTransactionMerchantResult {
     merchant: Merchant | null;
     merchantId: string | null;
     merchantRaw: string | null;
+    merchantNormalized: string | null;
     category: Category | null;
     categoryId: string | null;
     categoryAssignmentSource: CategoryAssignmentSource;
