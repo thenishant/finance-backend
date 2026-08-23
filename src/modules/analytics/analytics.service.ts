@@ -540,9 +540,9 @@ export const getDashboard = async (
         id: transaction.id,
         amount: Number(transaction.amount),
         type: transaction.type,
-        date: transaction.date.toISOString(),
-        merchant: transaction.merchant?.name ?? transaction.merchantRaw ?? null,
-        category: transaction.category?.name ?? null
+        merchant: transaction.merchant?.name ?? null,
+        category: transaction.category?.name ?? null,
+        date: transaction.date instanceof Date ? transaction.date.toISOString() : transaction.date,
     }));
 
     return {
