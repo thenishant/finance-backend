@@ -1,25 +1,37 @@
-import {prisma} from "../../database/prisma";
-import {TransactionType} from "@prisma/client";
-import {getRecentTransactions} from "../transactions/transaction.service";
 import {getFinancialAccounts} from "../financial-account/financial-account.service";
-
+import {getRecentTransactions} from "../transactions/transaction.service";
+import {
+    buildExpenseTree,
+    buildMonthlyComparison,
+    buildYearInvestment,
+    calculateInvestmentGoal,
+    calculateSavings
+} from "./analytics.helpers";
+import {
+    buildDashboard,
+    getCategoriesByIds,
+    getCurrentAndPreviousAnalytics,
+    getMonthlyAnalyticsData,
+    getTopCategoryRows,
+    getYearlyAnalyticsData
+} from "./analytics.queries";
 /* ======================================================
    TYPES
 ====================================================== */
 
-type ExpenseChild = {
+export type ExpenseChild = {
     id: string;
     name: string;
     total: number;
 };
 
-type ExpenseParent = {
+export type ExpenseParent = {
     category: string;
     total: number;
     children: ExpenseChild[];
 };
 
-type InvestmentGoalData = {
+export type InvestmentGoalData = {
     percent: number;
     goalAmount: number;
     invested: number;
@@ -27,7 +39,7 @@ type InvestmentGoalData = {
     progress: number | null;
 };
 
-type MonthlyAnalyticsResponse = {
+export type MonthlyAnalyticsResponse = {
     totalIncome: number;
     totalExpense: number;
     totalInvestment: number;
@@ -36,7 +48,7 @@ type MonthlyAnalyticsResponse = {
     expenseBreakdown: ExpenseParent[];
 };
 
-type YearMonth = {
+export type YearMonth = {
     month: number;
     income: number;
     expense: number;
@@ -51,7 +63,7 @@ type YearMonth = {
     };
 };
 
-type YearlyAnalyticsResponse = {
+export type YearlyAnalyticsResponse = {
     total: {
         totalIncome: number;
         totalExpense: number;
@@ -61,13 +73,13 @@ type YearlyAnalyticsResponse = {
     months: YearMonth[];
 };
 
-type TopCategory = {
+export type TopCategory = {
     categoryId: string | null;
     name: string;
     total: number;
 };
 
-type MonthlyComparisonResponse = {
+export type MonthlyComparisonResponse = {
     current: {
         totalIncome: number;
         totalExpense: number;
@@ -99,416 +111,331 @@ const toNumber = (value: unknown): number =>
    MONTHLY ANALYTICS
 ====================================================== */
 
-export const getMonthlyAnalytics = async (
+export async function getMonthlyAnalytics(
     userId: string,
     year: number,
-    month: number
-): Promise<MonthlyAnalyticsResponse> => {
+    month: number,
+): Promise<MonthlyAnalyticsResponse> {
 
-    const [analytics, goal] = await Promise.all([
-        prisma.monthlyAnalytics.findUnique({
-            where: {
-                userId_year_month: {userId, year, month}
-            }
-        }),
-        prisma.investmentGoal.findUnique({
-            where: {
-                userId_year_month: {userId, year, month}
-            }
-        })
-    ]);
+    const {
+        analytics,
+        goal,
+        expenseBreakdown,
+    } = await getMonthlyAnalyticsData(
+        userId,
+        year,
+        month,
+    );
 
-    const totalIncome = toNumber(analytics?.totalIncome);
-    const totalExpense = toNumber(analytics?.totalExpense);
-    const totalInvestment = toNumber(analytics?.totalInvestment);
-
-    /* Expense Breakdown */
-
-    type RawRow = {
-        parentId: string | null;
-        parentName: string | null;
-        childId: string | null;
-        childName: string | null;
-        total: unknown;
-    };
-
-    const rawBreakdown = await prisma.$queryRaw<RawRow[]>`
-        SELECT parent.id     AS "parentId",
-               parent.name   AS "parentName",
-               child.id      AS "childId",
-               child.name    AS "childName",
-               SUM(t.amount) AS total
-        FROM "Transaction" t
-                 LEFT JOIN "Category" child
-                           ON child.id = t."categoryId"
-                 LEFT JOIN "Category" parent
-                           ON parent.id = child."parentId"
-        WHERE t."userId" = ${userId}
-          AND t."deletedAt" IS NULL
-          AND t."type" = 'EXPENSE'
-          AND t."year" = ${year}
-          AND t."month" = ${month}
-        GROUP BY parent.id,
-                 parent.name,
-                 child.id,
-                 child.name
-    `;
-
-    const parentMap: Record<string, ExpenseParent> = {};
-
-    for (const row of rawBreakdown) {
-
-        const amount = toNumber(row.total);
-
-        const parentId =
-            row.parentId ??
-            row.childId ??
-            "uncategorized";
-
-        const parentName =
-            row.parentName ??
-            row.childName ??
-            "Uncategorized";
-
-        if (!parentMap[parentId]) {
-            parentMap[parentId] = {
-                category: parentName,
-                total: 0,
-                children: [],
-            };
-        }
-
-        parentMap[parentId].total += amount;
-
-        if (row.childId) {
-            parentMap[parentId].children.push({
-                id: row.childId,
-                name: row.childName ?? "Unknown",
-                total: amount,
-            });
-        }
-    }
-
-    const expenseBreakdown = Object.values(parentMap).sort((a, b) => b.total - a.total);
-
-    /* Investment */
-
-    const goalPercent = goal?.goalPercent ?? null;
-
-    const goalAmount =
-        goalPercent !== null
-            ? (totalIncome * goalPercent) / 100
-            : null;
-
-    const invested = totalInvestment;
-
-    const remaining =
-        goalAmount !== null
-            ? Math.max(goalAmount - invested, 0)
-            : null;
-
-    const progress = goalAmount !== null && goalAmount > 0
-        ? Number((invested / goalAmount).toFixed(2))
-        : null;
-
-    const breakdownTotal =
-        expenseBreakdown.reduce(
-            (sum, category) => sum + category.total,
-            0,
+    const totalIncome =
+        toNumber(
+            analytics?.totalIncome,
         );
 
-    console.log({
-        totalExpense,
-        breakdownTotal,
-        difference: totalExpense - breakdownTotal,
-    });
+    const totalExpense =
+        toNumber(
+            analytics?.totalExpense,
+        );
+
+    const totalInvestment =
+        toNumber(
+            analytics?.totalInvestment,
+        );
 
     return {
+
         totalIncome,
+
         totalExpense,
+
         totalInvestment,
+
         netSavings:
-            totalIncome -
-            totalExpense -
-            totalInvestment,
+            calculateSavings(
+                totalIncome,
+                totalExpense,
+                totalInvestment,
+            ),
+
         investmentGoal:
-            goalPercent !== null
-                ? {
-                    percent: goalPercent,
-                    goalAmount: goalAmount!,
-                    invested,
-                    remaining: remaining!,
-                    progress
-                }
-                : null,
-        expenseBreakdown
+            calculateInvestmentGoal({
+
+                totalIncome,
+
+                totalInvestment,
+
+                goalPercent:
+                    goal?.goalPercent ??
+                    null,
+
+            }),
+
+        expenseBreakdown:
+            buildExpenseTree(
+                expenseBreakdown,
+            ),
+
     };
-};
+
+}
 
 /* ======================================================
    YEARLY ANALYTICS
 ====================================================== */
 
-export const getYearlyAnalytics = async (
+export async function getYearlyAnalytics(
     userId: string,
-    year: number
-): Promise<YearlyAnalyticsResponse> => {
+    year: number,
+): Promise<YearlyAnalyticsResponse> {
 
-    const [monthsData, goals] = await Promise.all([
-        prisma.monthlyAnalytics.findMany({
-            where: {userId, year},
-            orderBy: {month: "asc"}
-        }),
-        prisma.investmentGoal.findMany({
-            where: {userId, year}
-        })
-    ]);
+    const {
+        analytics,
+        goals,
+    } = await getYearlyAnalyticsData(
+        userId,
+        year,
+    );
 
-    const monthlyMap: Record<number, YearMonth> = {};
+    const months: YearMonth[] = [];
 
-    for (let m = 1; m <= 12; m++) {
-        monthlyMap[m] = {
-            month: m,
-            income: 0,
-            expense: 0,
-            savings: 0,
-            investment: {
-                invested: 0,
-                goalPercent: 0,
-                goalAmount: 0,
-                remaining: 0,
-                progress: 0,
-                status: "red"
-            }
-        };
-    }
+    const yearlyGoal =
+        goals.find(
+            goal => goal.month === 0,
+        );
 
-    for (const m of monthsData) {
-        monthlyMap[m.month].income = toNumber(m.totalIncome);
-        monthlyMap[m.month].expense = toNumber(m.totalExpense);
-        monthlyMap[m.month].investment.invested =
-            toNumber(m.totalInvestment);
-    }
+    for (let month = 1; month <= 12; month++) {
 
-    const resolveGoal = (month: number) => {
-        const monthlyGoal = goals.find(g => g.month === month);
-        if (monthlyGoal) return monthlyGoal.goalPercent;
-
-        const yearlyGoal = goals.find(g => g.month === 0);
-        return yearlyGoal?.goalPercent ?? 0;
-    };
-
-    for (const m of Object.values(monthlyMap)) {
-
-        m.savings =
-            m.income -
-            m.expense -
-            m.investment.invested;
-
-        const goalPercent = resolveGoal(m.month);
-
-        m.investment.goalPercent = goalPercent;
-
-        m.investment.goalAmount =
-            m.income * (goalPercent / 100);
-
-        m.investment.remaining =
-            Math.max(
-                m.investment.goalAmount -
-                m.investment.invested,
-                0
+        const record =
+            analytics.find(
+                a => a.month === month,
             );
 
-        m.investment.progress =
-            m.investment.goalAmount > 0
-                ? m.investment.invested /
-                m.investment.goalAmount
-                : 0;
+        const goal =
+            goals.find(
+                g => g.month === month,
+            ) ?? yearlyGoal;
 
-        const p = m.investment.progress;
+        const income =
+            toNumber(
+                record?.totalIncome,
+            );
 
-        if (p >= 1) m.investment.status = "green";
-        else if (p >= 0.5) m.investment.status = "yellow";
-        else if (p > 0) m.investment.status = "orange";
-        else m.investment.status = "red";
+        const expense =
+            toNumber(
+                record?.totalExpense,
+            );
+
+        const invested =
+            toNumber(
+                record?.totalInvestment,
+            );
+
+        months.push({
+
+            month,
+
+            income,
+
+            expense,
+
+            savings:
+                calculateSavings(
+                    income,
+                    expense,
+                    invested,
+                ),
+
+            investment:
+                buildYearInvestment({
+
+                    income,
+
+                    invested,
+
+                    goalPercent:
+                        goal?.goalPercent ?? 0,
+
+                }),
+
+        });
+
     }
 
-    const months = Object.values(monthlyMap);
-
     const totalIncome =
-        months.reduce((a, m) => a + m.income, 0);
+        months.reduce(
+            (sum, month) =>
+                sum + month.income,
+            0,
+        );
 
     const totalExpense =
-        months.reduce((a, m) => a + m.expense, 0);
+        months.reduce(
+            (sum, month) =>
+                sum + month.expense,
+            0,
+        );
 
     const totalInvestment =
         months.reduce(
-            (a, m) => a + m.investment.invested,
-            0
+            (sum, month) =>
+                sum +
+                month.investment.invested,
+            0,
         );
 
     return {
+
         total: {
+
             totalIncome,
+
             totalExpense,
+
             totalInvestment,
+
             netSavings:
-                totalIncome -
-                totalExpense -
-                totalInvestment
+                calculateSavings(
+                    totalIncome,
+                    totalExpense,
+                    totalInvestment,
+                ),
+
         },
-        months
+
+        months,
+
     };
-};
+
+}
 
 /* ======================================================
    TOP SPENDING CATEGORIES
 ====================================================== */
 
-export const getTopSpendingCategories = async (
+export async function getTopSpendingCategories(
     userId: string,
     year: number,
-    month: number
-): Promise<TopCategory[]> => {
+    month: number,
+): Promise<TopCategory[]> {
 
-    const result = await prisma.transaction.groupBy({
-        by: ["categoryId"],
-        where: {
+    const rows =
+        await getTopCategoryRows(
             userId,
-            deletedAt: null,
-            type: TransactionType.EXPENSE,
             year,
-            month
-        },
-        _sum: {amount: true},
-        orderBy: {
-            _sum: {amount: "desc"}
-        },
-        take: 5
-    });
-
-    const categoryIds = result
-        .map(r => r.categoryId)
-        .filter((id): id is string => Boolean(id));
-
-    const categories = categoryIds.length
-        ? await prisma.category.findMany({
-            where: {
-                userId,
-                id: {in: categoryIds}
-            },
-            select: {
-                id: true,
-                name: true
-            }
-        })
-        : [];
-
-    return result.map(r => {
-
-        const category = categories.find(
-            c => c.id === r.categoryId
+            month,
         );
 
+    const categoryIds =
+        rows
+            .map(row => row.categoryId)
+            .filter(
+                (id): id is string => !!id,
+            );
+
+    const categories =
+        await getCategoriesByIds(
+            userId,
+            categoryIds,
+        );
+
+    return rows.map(row => {
+
+        const category =
+            categories.find(
+                c => c.id === row.categoryId,
+            );
+
         return {
-            categoryId: r.categoryId,
-            name: category?.name ?? "Unknown",
-            total: toNumber(r._sum?.amount)
+
+            categoryId:
+            row.categoryId,
+
+            name:
+                category?.name ??
+                "Unknown",
+
+            total:
+                toNumber(
+                    row._sum.amount,
+                ),
+
         };
+
     });
-};
+
+}
+
 
 /* ======================================================
    MONTHLY COMPARISON
 ====================================================== */
 
-export const getMonthlyComparison = async (
+export async function getMonthlyComparison(
     userId: string,
     year: number,
-    month: number
-): Promise<MonthlyComparisonResponse> => {
+    month: number,
+): Promise<MonthlyComparisonResponse> {
 
-    let prevYear = year;
-    let prevMonth = month - 1;
+    const {
+        current,
+        previous,
+    } =
+        await getCurrentAndPreviousAnalytics(
+            userId,
+            year,
+            month,
+        );
 
-    if (prevMonth === 0) {
-        prevMonth = 12;
-        prevYear = year - 1;
-    }
+    return buildMonthlyComparison({
 
-    const [current, previous] = await Promise.all([
-        prisma.monthlyAnalytics.findUnique({
-            where: {
-                userId_year_month: {userId, year, month}
-            }
-        }),
-        prisma.monthlyAnalytics.findUnique({
-            where: {
-                userId_year_month: {
-                    userId,
-                    year: prevYear,
-                    month: prevMonth
-                }
-            }
-        })
-    ]);
-
-    const currIncome = toNumber(current?.totalIncome);
-    const currExpense = toNumber(current?.totalExpense);
-    const currInvestment = toNumber(current?.totalInvestment);
-
-    const prevIncome = toNumber(previous?.totalIncome);
-    const prevExpense = toNumber(previous?.totalExpense);
-    const prevInvestment = toNumber(previous?.totalInvestment);
-
-    const currSavings =
-        currIncome -
-        currExpense -
-        currInvestment;
-
-    const prevSavings =
-        prevIncome -
-        prevExpense -
-        prevInvestment;
-
-    const calculateChange = (curr: number, prev: number) => {
-        const diff = curr - prev;
-
-        const percent =
-            prev === 0
-                ? null
-                : Number(((diff / prev) * 100).toFixed(2));
-
-        return {diff, percent};
-    };
-
-    return {
         current: {
-            totalIncome: currIncome,
-            totalExpense: currExpense,
-            totalInvestment: currInvestment,
-            netSavings: currSavings
-        },
-        previous: {
-            totalIncome: prevIncome,
-            totalExpense: prevExpense,
-            totalInvestment: prevInvestment,
-            netSavings: prevSavings
-        },
-        change: {
-            income: calculateChange(currIncome, prevIncome),
-            expense: calculateChange(currExpense, prevExpense),
-            investment: calculateChange(currInvestment, prevInvestment),
-            savings: calculateChange(currSavings, prevSavings)
-        }
-    };
-};
 
-export const getDashboard = async (
+            income:
+                toNumber(
+                    current?.totalIncome,
+                ),
+
+            expense:
+                toNumber(
+                    current?.totalExpense,
+                ),
+
+            investment:
+                toNumber(
+                    current?.totalInvestment,
+                ),
+
+        },
+
+        previous: {
+
+            income:
+                toNumber(
+                    previous?.totalIncome,
+                ),
+
+            expense:
+                toNumber(
+                    previous?.totalExpense,
+                ),
+
+            investment:
+                toNumber(
+                    previous?.totalInvestment,
+                ),
+
+        },
+
+    });
+
+}
+
+export async function getDashboard(
     userId: string,
     year: number,
-    month: number
-) => {
+    month: number,
+) {
+
     const [
         accounts,
         monthly,
@@ -516,46 +443,48 @@ export const getDashboard = async (
         topCategories,
         recentTransactions,
     ] = await Promise.all([
-        getFinancialAccounts(userId),
-        getMonthlyAnalytics(userId, year, month),
-        getMonthlyComparison(userId, year, month),
-        getTopSpendingCategories(userId, year, month),
-        getRecentTransactions(userId, 5),
+
+        getFinancialAccounts(
+            userId,
+        ),
+
+        getMonthlyAnalytics(
+            userId,
+            year,
+            month,
+        ),
+
+        getMonthlyComparison(
+            userId,
+            year,
+            month,
+        ),
+
+        getTopSpendingCategories(
+            userId,
+            year,
+            month,
+        ),
+
+        getRecentTransactions(
+            userId,
+            5,
+        ),
+
     ]);
 
-    const accountSummary = accounts.map(account => ({
-        id: account.id,
-        name: account.name,
-        type: account.type,
-        balance: Number(account.balance),
-        last4: account.last4,
-    }));
+    return buildDashboard({
 
-    const totalBalance = accountSummary.reduce(
-        (sum, account) => sum + Number(account.balance),
-        0
-    );
+        accounts,
 
-    const recent = recentTransactions.map(transaction => ({
-        id: transaction.id,
-        amount: Number(transaction.amount),
-        type: transaction.type,
-        merchant: transaction.merchant?.name ?? null,
-        category: transaction.category?.name ?? null,
-        date: transaction.date instanceof Date ? transaction.date.toISOString() : transaction.date,
-    }));
+        monthly,
 
-    return {
-        summary: {
-            totalBalance,
-            monthlyIncome: monthly.totalIncome,
-            monthlyExpense: monthly.totalExpense,
-            monthlyInvestment: monthly.totalInvestment,
-            monthlySavings: monthly.netSavings,
-        },
         comparison,
-        accounts: accountSummary,
+
         topCategories,
-        recentTransactions: recent,
-    };
-};
+
+        recentTransactions,
+
+    });
+
+}

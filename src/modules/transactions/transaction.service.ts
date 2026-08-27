@@ -1,29 +1,139 @@
-import {prisma} from "../../database/prisma";
 import {CategoryAssignmentSource, Prisma, TransactionType} from "@prisma/client";
+
+import {prisma} from "../../database/prisma";
+
+import {serialize} from "../../shared/utils/prisma.utils";
+import {needsCategoryReview} from "../merchant/merchant.review";
+
+import {transactionInclude} from "./transaction.constants";
+
 import {
-    applyTransactionEffects,
+    deleteLedgerEntries,
     findIdempotentTransaction,
     getDeletedTransaction,
     getExistingTransaction,
     getTransactionOrderBy,
     learnUserMerchantMapping,
-    removeTransactionEffects,
+    postLedgerEntries,
     resolveNewTransactionMerchant,
     resolveTransactionUpdate,
     SortOrder,
     TransactionSortBy,
     validateTransactionAccounts,
     validateTransactionBasics,
-    validateTransactionCategory
+    validateTransactionCategory,
 } from "./transactions.utils";
-import {transactionInclude} from "./transaction.constants";
-import {serialize} from "../../shared/utils/prisma.utils";
-import {mapTransaction} from "./transaction.mapper";
+
+type CreateTransactionInput = {
+    type: TransactionType;
+    amount: number;
+    date: string;
+    merchant?: string;
+    categoryId?: string;
+    sourceAccountId?: string;
+    destinationAccountId?: string;
+    note?: string;
+    idempotencyKey?: string;
+};
+
+type UpdateTransactionInput = {
+    type?: TransactionType;
+    amount?: number;
+    date?: string | Date;
+    merchant?: string | null;
+    categoryId?: string | null;
+    sourceAccountId?: string | null;
+    destinationAccountId?: string | null;
+    updateMerchantMapping?: boolean;
+    note?: string | null;
+};
+
+export type TransactionFilters = {
+    type?: TransactionType;
+    categoryId?: string;
+    accountId?: string;
+    from?: string | Date;
+    to?: string | Date;
+};
 
 const activeTransactionWhere = (userId: string) => ({
     userId,
     deletedAt: null,
 });
+
+const mapTransaction = <
+    T extends {
+        categoryAssignmentSource: CategoryAssignmentSource;
+        aiCategoryConfidence: number | null;
+        category?: {
+            name: string;
+        } | null;
+    }
+>(
+    transaction: T,
+) => ({
+    ...transaction,
+    needsCategoryReview: needsCategoryReview({
+        assignmentSource: transaction.categoryAssignmentSource,
+        confidence: transaction.aiCategoryConfidence,
+        categoryName: transaction.category?.name,
+    }),
+});
+
+const serializeTransaction = <T extends Parameters<typeof mapTransaction>[0]>(
+    transaction: T,
+) => serialize(mapTransaction(transaction));
+
+const serializeTransactions = <T extends Parameters<typeof mapTransaction>[0]>(
+    transactions: T[],
+) => serialize(transactions.map(mapTransaction));
+
+const buildTransactionWhere = (
+    userId: string,
+    filters: TransactionFilters = {},
+): Prisma.TransactionWhereInput => {
+    const where: Prisma.TransactionWhereInput = activeTransactionWhere(userId);
+
+    if (filters.type) {
+        where.type = filters.type;
+    }
+
+    if (filters.categoryId) {
+        where.categoryId = filters.categoryId;
+    }
+
+    if (filters.accountId) {
+        where.OR = [
+            {
+                sourceAccountId: filters.accountId,
+            },
+            {
+                destinationAccountId: filters.accountId,
+            },
+        ];
+    }
+
+    if (filters.from || filters.to) {
+        where.date = {
+            ...(filters.from
+                ? {
+                    gte: filters.from instanceof Date
+                        ? filters.from
+                        : new Date(filters.from),
+                }
+                : {}),
+            ...(filters.to
+                ? {
+                    lte: filters.to instanceof Date
+                        ? filters.to
+                        : new Date(filters.to),
+                }
+                : {}),
+        };
+    }
+
+    return where;
+};
 
 export const updateAnalytics = async (
     tx: Prisma.TransactionClient,
@@ -38,12 +148,8 @@ export const updateAnalytics = async (
         [TransactionType.INCOME]: "totalIncome",
         [TransactionType.EXPENSE]: "totalExpense",
         [TransactionType.INVESTMENT]: "totalInvestment",
+        [TransactionType.TRANSFER]: "totalTransfer",
     } as const;
-
-    switch (type) {
-        case TransactionType.TRANSFER:
-            return;
-    }
 
     const field = analyticsField[type];
     if (!field) {
@@ -62,6 +168,7 @@ export const updateAnalytics = async (
             totalIncome: type === TransactionType.INCOME ? amount : new Prisma.Decimal(0),
             totalExpense: type === TransactionType.EXPENSE ? amount : new Prisma.Decimal(0),
             totalInvestment: type === TransactionType.INVESTMENT ? amount : new Prisma.Decimal(0),
+            totalTransfer: type === TransactionType.TRANSFER ? amount : new Prisma.Decimal(0),
         },
     });
 };
@@ -69,110 +176,163 @@ export const updateAnalytics = async (
 
 export const createTransaction = async (
     userId: string,
-    data: {
-        type: TransactionType;
-        amount: number;
-        date: string;
-        merchant?: string;
-        categoryId?: string;
-        sourceAccountId?: string;
-        destinationAccountId?: string;
-        note?: string;
-        idempotencyKey?: string;
-    },
+    data: CreateTransactionInput,
 ) => {
-    return prisma.$transaction(async tx => {
-        const {amount, date, year, month,} = validateTransactionBasics({amount: data.amount, date: data.date,});
-
-        const existing = await findIdempotentTransaction({
-            tx,
-            idempotencyKey: data.idempotencyKey,
-            include: transactionInclude,
-        });
-
-        if (existing) {
-            return serialize(
-                mapTransaction(existing),
-            );
-        }
-
-        const {sourceAccountId, destinationAccountId,} = await validateTransactionAccounts({
-            tx,
-            userId,
-            type: data.type,
-            sourceAccountId:
-            data.sourceAccountId,
-            destinationAccountId:
-            data.destinationAccountId,
-        });
-
-        const merchant = await resolveNewTransactionMerchant({
+    const merchant =
+        await resolveNewTransactionMerchant({
             userId,
             merchantRaw: data.merchant,
             transactionType: data.type,
             categoryId: data.categoryId,
         });
 
-        const categoryId = data.categoryId ?? merchant.categoryId;
-        const categoryAssignmentSource = data.categoryId ? CategoryAssignmentSource.USER : merchant.categoryAssignmentSource;
-        const aiCategoryConfidence = data.categoryId ? null : merchant.confidence;
-        await validateTransactionCategory({tx, userId, type: data.type, categoryId,});
-        const transaction = await tx.transaction.create({
-            data: {
-                userId,
-                type: data.type,
-                amount,
-                date,
-                year,
-                month,
-                merchantId: merchant.merchantId,
-                merchantRaw: merchant.merchantRaw,
-                merchantNormalized: merchant.merchantNormalized,
-                categoryId: data.type === TransactionType.TRANSFER ? null : categoryId,
-                categoryAssignmentSource: data.type === TransactionType.TRANSFER ? CategoryAssignmentSource.USER : categoryAssignmentSource,
-                aiCategoryConfidence,
+    return prisma.$transaction(async tx => {
+        const {
+            amount,
+            date,
+            year,
+            month,
+        } = validateTransactionBasics({
+            amount: data.amount,
+            date: data.date,
+        });
+
+        const existing =
+            await findIdempotentTransaction({
+                tx,
+                idempotencyKey:
+                data.idempotencyKey,
+            });
+
+        if (existing) {
+            return serializeTransaction(
+                existing,
+            );
+        }
+
+        const categoryId =
+            data.categoryId ??
+            merchant.categoryId;
+
+        const categoryAssignmentSource =
+            data.categoryId
+                ? CategoryAssignmentSource.USER
+                : merchant.categoryAssignmentSource;
+
+        const aiCategoryConfidence =
+            data.categoryId
+                ? null
+                : merchant.confidence;
+
+
+        const [
+            {
                 sourceAccountId,
                 destinationAccountId,
-                note: data.note ?? null,
-                idempotencyKey: data.idempotencyKey ?? null,
             },
-            include: transactionInclude,
-        });
+        ] = await Promise.all([
+            validateTransactionAccounts({
+                tx,
+                userId,
+                type: data.type,
+                sourceAccountId:
+                data.sourceAccountId,
+                destinationAccountId:
+                data.destinationAccountId,
+            }),
+            validateTransactionCategory({
+                tx,
+                userId,
+                type: data.type,
+                categoryId,
+            }),
+        ]);
 
-        console.info("[Transaction] Created", {
-            id: transaction.id,
-            amount: transaction.amount.toString(),
-            fingerPrint: transaction.fingerprint,
-            gmailMessageId: transaction.gmailMessageId,
-        });
+        const transaction =
+            await tx.transaction.create({
+                data: {
+                    userId,
+                    type: data.type,
+                    amount,
+                    date,
+                    year,
+                    month,
 
-        await learnUserMerchantMapping({userId, transaction, transactionType: data.type,});
-        await applyTransactionEffects({tx, userId, transaction, amount,});
-        return serialize(mapTransaction(transaction),
+                    merchantId:
+                    merchant.merchantId,
+
+                    merchantRaw:
+                    merchant.merchantRaw,
+
+                    merchantNormalized:
+                    merchant.merchantNormalized,
+
+                    categoryId:
+                        data.type ===
+                        TransactionType.TRANSFER
+                            ? null
+                            : categoryId,
+
+                    categoryAssignmentSource:
+                        data.type ===
+                        TransactionType.TRANSFER
+                            ? CategoryAssignmentSource.USER
+                            : categoryAssignmentSource,
+
+                    aiCategoryConfidence,
+
+                    sourceAccountId,
+                    destinationAccountId,
+
+                    note:
+                        data.note ?? null,
+
+                    idempotencyKey:
+                        data.idempotencyKey ?? null,
+                },
+
+                include:
+                transactionInclude,
+            });
+
+        await Promise.all([
+            learnUserMerchantMapping({
+                tx,
+                userId,
+                transaction,
+                transactionType: data.type,
+            }),
+            postLedgerEntries({
+                tx,
+                userId,
+                transaction,
+                amount,
+            }),
+            updateAnalytics(
+                tx,
+                userId,
+                year,
+                month,
+                transaction.type,
+                amount,
+                "increment",
+            ),
+        ]);
+
+        return serializeTransaction(
+            transaction,
         );
-    })
-        ;
+    });
 };
 
-export const deleteTransaction = async (
-    userId: string,
-    transactionId: string,
-) => {
+export const deleteTransaction = async (userId: string, transactionId: string,) => {
     return prisma.$transaction(async tx => {
-
         const transaction =
             await getExistingTransaction({
                 tx,
                 userId,
                 transactionId,
             });
-
-        await removeTransactionEffects({
-            tx,
-            userId,
-            transaction,
-        });
-
         const deleted =
             await tx.transaction.update({
                 where: {
@@ -184,19 +344,24 @@ export const deleteTransaction = async (
                 include: transactionInclude,
             });
 
-        return serialize(
-            mapTransaction(deleted),
-        );
+        await Promise.all([
+            deleteLedgerEntries({tx, transactionId: transaction.id,}),
+            updateAnalytics(
+                tx,
+                userId,
+                transaction.year,
+                transaction.month,
+                transaction.type,
+                transaction.amount,
+                "decrement",
+            ),
+        ]);
+        return serializeTransaction(deleted);
     });
 };
 
-export const restoreTransaction = async (
-    userId: string,
-    transactionId: string,
-) => {
-
+export const restoreTransaction = async (userId: string, transactionId: string,) => {
     return prisma.$transaction(async tx => {
-
         const transaction =
             await getDeletedTransaction({
                 tx,
@@ -215,17 +380,27 @@ export const restoreTransaction = async (
                 include: transactionInclude,
             });
 
-        await applyTransactionEffects({
-            tx,
-            userId,
-            transaction: restored,
-            amount: restored.amount,
-        });
+        await Promise.all([
+            postLedgerEntries({
+                tx,
+                userId,
+                transaction: restored,
+                amount: restored.amount,
+            }),
+            updateAnalytics(
+                tx,
+                userId,
+                restored.year,
+                restored.month,
+                restored.type,
+                restored.amount,
+                "increment",
+            ),
+        ]);
 
-        return serialize(
-            mapTransaction(restored),
-        );
+        return serializeTransaction(restored);
     });
+
 };
 
 export const getRecentTransactions = async (
@@ -243,24 +418,23 @@ export const getRecentTransactions = async (
             take: limit,
         });
 
-    return serialize(
-        transactions.map(mapTransaction),
-    );
+    return serializeTransactions(transactions);
 };
 
 export const getTransactions = async (
     userId: string,
     sortBy: TransactionSortBy = "date",
     order: SortOrder = "desc",
+    filters: TransactionFilters = {},
 ) => {
     const transactions =
         await prisma.transaction.findMany({
-            where: activeTransactionWhere(userId),
+            where: buildTransactionWhere(userId, filters),
             include: transactionInclude,
             orderBy: getTransactionOrderBy(sortBy, order,),
         });
 
-    return serialize(transactions.map(mapTransaction),);
+    return serializeTransactions(transactions);
 };
 
 export const getTransactionById = async (
@@ -281,156 +455,325 @@ export const getTransactionById = async (
         throw new Error("Transaction not found");
     }
 
-    return serialize(
-        mapTransaction(transaction),
-    );
+    return serializeTransaction(transaction);
 };
+
 export const updateTransaction = async (
     userId: string,
     transactionId: string,
-    data: {
-        type: TransactionType;
-        amount: number;
-        date: string;
-        merchant?: string;
-        categoryId?: string;
-        sourceAccountId?: string;
-        destinationAccountId?: string;
-        updateMerchantMapping?: boolean;
-        note?: string;
-    },
+    data: UpdateTransactionInput,
 ) => {
-    return prisma.$transaction(async tx => {
-
-        const existing = await getExistingTransaction({
-            tx,
-            userId,
-            transactionId,
+    const existing =
+        await prisma.transaction.findFirst({
+            where: {
+                id: transactionId,
+                userId,
+                deletedAt: null,
+            },
+            include: transactionInclude,
         });
+
+    if (!existing) {
+        throw new Error(
+            "Transaction not found.",
+        );
+    }
+    const merged = {
+        type:
+            data.type ??
+            existing.type,
+
+        amount:
+            data.amount ??
+            Number(existing.amount),
+
+        date:
+            data.date ??
+            existing.date.toISOString(),
+
+        merchant:
+            data.merchant === undefined
+                ? existing.merchantRaw
+                : data.merchant,
+
+        categoryId:
+            data.categoryId === undefined
+                ? existing.categoryId
+                : data.categoryId,
+
+        sourceAccountId:
+            data.sourceAccountId === undefined
+                ? existing.sourceAccountId
+                : data.sourceAccountId,
+
+        destinationAccountId:
+            data.destinationAccountId === undefined
+                ? existing.destinationAccountId
+                : data.destinationAccountId,
+
+        note:
+            data.note === undefined
+                ? existing.note
+                : data.note,
+    };
+    let merchant: {
+        merchantId: string | null;
+        merchantRaw: string | null;
+        merchantNormalized: string | null;
+        categoryId: string | null;
+        categoryAssignmentSource: CategoryAssignmentSource;
+        aiCategoryConfidence: number | null;
+    };
+
+    if (data.merchant !== undefined) {
+        merchant = await resolveTransactionUpdate({
+            userId,
+            existing,
+            data: {
+                type: merged.type,
+                merchant: data.merchant,
+                categoryId:
+                    data.categoryId === undefined
+                        ? existing.categoryId
+                        : data.categoryId,
+            },
+        });
+    } else if (data.categoryId !== undefined) {
+        merchant = {
+            merchantId:
+            existing.merchantId,
+
+            merchantRaw:
+            existing.merchantRaw,
+
+            merchantNormalized:
+            existing.merchantNormalized,
+
+            categoryId:
+                merged.type === TransactionType.TRANSFER
+                    ? null
+                    : data.categoryId,
+
+            categoryAssignmentSource:
+                merged.type === TransactionType.TRANSFER
+                    ? CategoryAssignmentSource.USER
+                    : CategoryAssignmentSource.USER,
+
+            aiCategoryConfidence:
+                null,
+        };
+    } else if (data.type !== undefined && data.type !== existing.type) {
+        const existingCategoryIsValid = existing.category?.type === merged.type;
+        merchant = {
+            merchantId: existing.merchantId,
+            merchantRaw: existing.merchantRaw,
+            merchantNormalized: existing.merchantNormalized,
+            categoryId:
+                merged.type === TransactionType.TRANSFER
+                    ? null
+                    : existingCategoryIsValid
+                        ? existing.categoryId
+                        : null,
+
+            categoryAssignmentSource:
+                merged.type === TransactionType.TRANSFER
+                    ? CategoryAssignmentSource.USER
+                    : existingCategoryIsValid
+                        ? existing.categoryAssignmentSource
+                        : CategoryAssignmentSource.NONE,
+
+            aiCategoryConfidence:
+                merged.type === TransactionType.TRANSFER ||
+                !existingCategoryIsValid
+                    ? null
+                    : existing.aiCategoryConfidence,
+        };
+    } else {
+        merchant = {
+            merchantId:
+            existing.merchantId,
+
+            merchantRaw:
+            existing.merchantRaw,
+
+            merchantNormalized:
+            existing.merchantNormalized,
+
+            categoryId:
+            existing.categoryId,
+
+            categoryAssignmentSource:
+            existing.categoryAssignmentSource,
+
+            aiCategoryConfidence:
+            existing.aiCategoryConfidence,
+        };
+    }
+
+    return prisma.$transaction(async tx => {
+        const current =
+            await getExistingTransaction({
+                tx,
+                userId,
+                transactionId,
+            });
 
         const {
             amount,
             date,
+            year,
+            month,
         } = validateTransactionBasics({
-            amount: data.amount,
-            date: data.date,
+            amount: merged.amount,
+            date: merged.date,
         });
 
-        const sameDay =
-            existing.date.getFullYear() === date.getFullYear() &&
-            existing.date.getMonth() === date.getMonth() &&
-            existing.date.getDate() === date.getDate();
-
-        const year = sameDay
-            ? existing.year
-            : date.getFullYear();
-
-        const month = sameDay
-            ? existing.month
-            : date.getMonth() + 1;
-
+        /*
+         * Validate accounts against the NEW transaction state.
+         */
         const {
             sourceAccountId,
             destinationAccountId,
         } = await validateTransactionAccounts({
             tx,
             userId,
-            type: data.type,
+            type: merged.type,
             sourceAccountId:
-                data.sourceAccountId ??
-                existing.sourceAccountId,
+            merged.sourceAccountId,
             destinationAccountId:
-                data.destinationAccountId ??
-                existing.destinationAccountId,
+            merged.destinationAccountId,
         });
 
-        const merchant = await resolveTransactionUpdate({
-            tx,
-            userId,
-            existing,
-            data,
-        });
-
+        /*
+         * Validate the resolved category.
+         *
+         * Transfers intentionally have no category.
+         */
         await validateTransactionCategory({
             tx,
             userId,
-            type: data.type,
-            categoryId: merchant.categoryId,
+            type: merged.type,
+            categoryId:
+            merchant.categoryId,
         });
 
-        const analyticsChanged =
-            existing.type !== data.type ||
-            !existing.amount.equals(amount) ||
-            existing.year !== year ||
-            existing.month !== month ||
-            existing.sourceAccountId !== sourceAccountId ||
-            existing.destinationAccountId !== destinationAccountId;
+        const financialChanged =
+            current.type !== merged.type ||
+            !current.amount.equals(amount) ||
+            current.year !== year ||
+            current.month !== month ||
+            current.sourceAccountId !==
+            sourceAccountId ||
+            current.destinationAccountId !==
+            destinationAccountId;
+        const updated =
+            await tx.transaction.update({
+                where: {
+                    id: transactionId,
+                },
 
-        if (analyticsChanged) {
-            await removeTransactionEffects({
-                tx,
-                userId,
-                transaction: existing,
+                data: {
+                    type: merged.type,
+                    amount,
+                    date,
+                    year,
+                    month,
+                    sourceAccountId,
+                    destinationAccountId,
+                    merchantId: merchant.merchantId,
+                    merchantRaw: merchant.merchantRaw,
+                    merchantNormalized:
+                    merchant.merchantNormalized,
+
+                    categoryId:
+                        merged.type ===
+                        TransactionType.TRANSFER
+                            ? null
+                            : merchant.categoryId,
+
+                    categoryAssignmentSource:
+                        merged.type ===
+                        TransactionType.TRANSFER
+                            ? CategoryAssignmentSource.USER
+                            : merchant.categoryAssignmentSource,
+
+                    aiCategoryConfidence:
+                        merged.type ===
+                        TransactionType.TRANSFER
+                            ? null
+                            : merchant.aiCategoryConfidence,
+
+                    note:
+                    merged.note,
+                },
+
+                include:
+                transactionInclude,
             });
-        }
-
-        const updated = await tx.transaction.update({
-            where: {
-                id: existing.id,
-            },
-            data: {
-                type: data.type,
-                amount,
-                date,
-                year,
-                month,
-
-                merchantId: merchant.merchantId,
-                merchantRaw: merchant.merchantRaw,
-                merchantNormalized: merchant.merchantNormalized,
-                categoryId:
-                    data.type === TransactionType.TRANSFER
-                        ? null
-                        : merchant.categoryId,
-
-                categoryAssignmentSource:
-                    data.type === TransactionType.TRANSFER
-                        ? CategoryAssignmentSource.USER
-                        : merchant.categoryAssignmentSource,
-
-                aiCategoryConfidence:
-                merchant.aiCategoryConfidence,
-
-                sourceAccountId,
-                destinationAccountId,
-
-                note: data.note ?? existing.note,
-            },
-            include: transactionInclude,
-        });
-
         if (
-            updated.merchantId !== existing.merchantId ||
-            updated.categoryId !== existing.categoryId
+            updated.merchantId !==
+            current.merchantId ||
+            updated.categoryId !==
+            current.categoryId
         ) {
             await learnUserMerchantMapping({
+                tx,
                 userId,
                 transaction: updated,
-                transactionType: data.type,
+                transactionType:
+                merged.type,
             });
         }
 
-        if (analyticsChanged) {
-            await applyTransactionEffects({
+        const analyticsChanged =
+            current.type !== merged.type ||
+            !current.amount.equals(amount) ||
+            current.year !== year ||
+            current.month !== month;
+
+        if (financialChanged) {
+            await deleteLedgerEntries({
+                tx,
+                transactionId:
+                current.id,
+            });
+
+            /*
+             * Create ledger entries for the new state.
+             */
+            await postLedgerEntries({
                 tx,
                 userId,
                 transaction: updated,
                 amount,
             });
+
         }
 
-        return serialize(
-            mapTransaction(updated),
+        if (analyticsChanged) {
+            await updateAnalytics(
+                tx,
+                userId,
+                current.year,
+                current.month,
+                current.type,
+                current.amount,
+                "decrement",
+            );
+
+            await updateAnalytics(
+                tx,
+                userId,
+                year,
+                month,
+                updated.type,
+                amount,
+                "increment",
+            );
+        }
+
+        return serializeTransaction(
+            updated,
         );
     });
 };

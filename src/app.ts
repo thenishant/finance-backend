@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import dotenv from 'dotenv';
 import swaggerUi from "swagger-ui-express";
 import authRoutes from './modules/auth/auth.routes';
 import errorHandler from './shared/middleware/errorHandler';
@@ -13,7 +12,6 @@ import gmailRoutes from "./modules/email/gmail/gmail.routes";
 import financialAccountRoutes from "./modules/financial-account/financial-account.routes";
 import {specs} from "./docs/swagger";
 
-dotenv.config();
 
 const app = express();
 

@@ -6,11 +6,11 @@ const router = Router();
 
 router.use(authenticate);
 
-router.get("/", authenticate, transactionController.getAllTransactions);
-router.get("/recent", authenticate, transactionController.getRecentTransactions);
-router.post("/", authenticate, transactionController.create);
-router.get("/:id", authenticate, transactionController.getTransactionById);
-router.delete("/:id", authenticate, transactionController.remove);
-router.patch("/:id/restore", authenticate, transactionController.restore);
-router.put("/:id", authenticate, transactionController.update);
+router.get("/", transactionController.getAllTransactions);
+router.get("/recent", transactionController.getRecentTransactions);
+router.post("/", transactionController.create);
+router.get("/:id", transactionController.getTransactionById);
+router.delete("/:id", transactionController.remove);
+router.patch("/:id/restore", transactionController.restore);
+router.put("/:id", transactionController.update);
 export default router;

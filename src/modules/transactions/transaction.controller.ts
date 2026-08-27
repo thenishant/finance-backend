@@ -1,4 +1,5 @@
 import {NextFunction, Request, Response} from "express";
+import {TransactionType} from "@prisma/client";
 import {createTransactionSchema, updateTransactionSchema} from "./transaction.dto";
 import * as transactionService from "./transaction.service";
 import {getParamId, getUserId} from "../../shared/utils/auth.utils";
@@ -50,9 +51,36 @@ export const getRecentTransactions = async (req: Request, res: Response, next: N
 
 export const getAllTransactions = async (req: Request, res: Response, next: NextFunction) => {
     try {
-        const sortBy = req.query.sortBy === "createdAt" ? "createdAt" : "date";
+        const sortBy =
+            req.query.sortBy === "createdAt" ||
+            req.query.sortBy === "amount"
+                ? req.query.sortBy
+                : "date";
         const order = req.query.order === "asc" ? "asc" : "desc";
-        const transactions = await transactionService.getTransactions(getUserId(req), sortBy, order,);
+        const type =
+            Object.values(TransactionType).includes(req.query.type as TransactionType)
+                ? req.query.type as TransactionType
+                : undefined;
+        const filters: transactionService.TransactionFilters = {
+            type,
+            categoryId:
+                typeof req.query.categoryId === "string"
+                    ? req.query.categoryId
+                    : undefined,
+            accountId:
+                typeof req.query.accountId === "string"
+                    ? req.query.accountId
+                    : undefined,
+            from:
+                typeof req.query.from === "string"
+                    ? req.query.from
+                    : undefined,
+            to:
+                typeof req.query.to === "string"
+                    ? req.query.to
+                    : undefined,
+        };
+        const transactions = await transactionService.getTransactions(getUserId(req), sortBy, order, filters,);
         return res.json({
             success: true, data: transactions,
         });

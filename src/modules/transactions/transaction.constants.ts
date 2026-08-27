@@ -10,3 +10,8 @@ export const transactionInclude = {
     sourceAccount: true,
     destinationAccount: true,
 } satisfies Prisma.TransactionInclude;
+
+export type TransactionWithRelations =
+    Prisma.TransactionGetPayload<{
+        include: typeof transactionInclude;
+    }>;
