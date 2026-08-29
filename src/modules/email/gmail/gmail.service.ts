@@ -315,26 +315,65 @@ export const getStatus = async (
 
 };
 
-export const processExistingEmails = async (userId: string) => {
-    const messages = await prisma.gmailMessage.findMany({
-        where: {
-            processed: false,
-            gmailAccount: {
-                userId,
+export const processExistingEmails = async (
+    userId: string,
+) => {
+    const messages =
+        await prisma.gmailMessage.findMany({
+            where: {
+                gmailAccount: {
+                    userId,
+                },
             },
-        },
-    });
+        });
+
+    let updated = 0;
+    let created = 0;
+    let duplicates = 0;
+    let failed = 0;
 
     for (const message of messages) {
         try {
-            await processGmailMessage(message.id);
+            const result =
+                await processGmailMessage(
+                    message.id,
+                );
+
+            switch (result.status) {
+                case "updated":
+                    updated++;
+                    break;
+
+                case "created":
+                    created++;
+                    break;
+
+                case "duplicate":
+                    duplicates++;
+                    break;
+
+                default:
+                    break;
+            }
         } catch (error) {
-            console.error("FAILED", message.id, error);
+            failed++;
+
+            console.error(
+                "[Gmail] Failed to reprocess message",
+                {
+                    messageId: message.id,
+                    error,
+                },
+            );
         }
     }
 
     return {
         count: messages.length,
+        created,
+        updated,
+        duplicates,
+        failed,
     };
 };
 

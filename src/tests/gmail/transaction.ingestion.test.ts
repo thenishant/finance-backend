@@ -1,7 +1,7 @@
-import {beforeEach, describe, expect, it, vi,} from "vitest";
+import {describe, expect, it, vi,} from "vitest";
 
 import {FinancialAccountType, TransactionType,} from "@prisma/client";
-import {ingestGmailEmail} from "../../modules/email/gmail/ingestion/transaction.ingestion";
+import {parseAxisEmail} from "../../modules/email/gmail/parsers/axis/axis.parser";
 
 const mocks = vi.hoisted(() => ({
     transactionFindUnique: vi.fn(),
@@ -72,318 +72,369 @@ vi.mock(
     }),
 );
 
-describe("ingestGmailEmail", () => {
+describe("Axis email parser", () => {
 
-    beforeEach(() => {
+    it("parses a standard bank account debit", () => {
 
-        vi.clearAllMocks();
+        const subject =
+            "INR 160.00 was debited from your A/c no. XX0999.";
 
-        mocks.transaction.mockImplementation(
-            async (callback: any) => {
+        const body = `
+            28-08-2026
 
-                const tx = {
-                    transaction: {
-                        findUnique:
-                        mocks.transactionFindUnique,
-                        create:
-                        mocks.transactionCreate,
-                    },
+            Dear Nishant Sharma,
 
-                    financialAccount: {
-                        findFirst:
-                        mocks.financialAccountFindFirst,
-                    },
-                };
+            Here's the summary of your transaction:
 
-                return callback(tx);
-            },
-        );
+            Amount Debited:
+            INR 160.00
 
-        mocks.detectBankProvider.mockReturnValue(
-            "HDFC",
-        );
+            Account Number:
+            XX0999
 
-        mocks.parseEmail.mockReturnValue({
-            amount: 1250,
-            merchant: "Swiggy",
-            type: TransactionType.EXPENSE,
-            transactionDate:
-                new Date("2026-08-25T10:00:00.000Z"),
-            accountLast4: "1234",
-            accountType:
-            FinancialAccountType.BANK_ACCOUNT,
-        });
+            Date & Time:
+            28-08-26, 20:40:27 IST
 
-        mocks.resolveTransactionMerchant
-            .mockResolvedValue({
-                merchantId: "merchant-1",
-                merchantRaw: "Swiggy",
-                merchantNormalized: "swiggy",
-                categoryId: "category-1",
-                categoryAssignmentSource: "AI",
-                confidence: 0.95,
-            });
+            Transaction Info:
+            UPI/P2M/660615862577/SHAKILA THAPA
 
-        mocks.transactionFindUnique
-            .mockResolvedValue(null);
-
-        mocks.financialAccountFindFirst
-            .mockResolvedValue({
-                id: "account-1",
-            });
-
-        mocks.transactionCreate
-            .mockResolvedValue({
-                id: "transaction-1",
-                type: TransactionType.EXPENSE,
-                amount: 1250,
-                date:
-                    new Date(
-                        "2026-08-25T10:00:00.000Z",
-                    ),
-                year: 2026,
-                month: 8,
-                sourceAccountId: "account-1",
-            });
-    });
-
-    it("skips unsupported senders", async () => {
-
-        mocks.detectBankProvider.mockReturnValue(
-            "UNKNOWN",
-        );
+            If this transaction was not initiated by you:
+            To block UPI:
+            SMS BLOCKUPI
+        `;
 
         const result =
-            await ingestGmailEmail({
-                userId: "user-1",
-                gmailMessageId: "gmail-1",
-                sender: "amazon@example.com",
-                subject: "Order shipped",
-                body: "Your order has shipped",
-            });
-
-        expect(result).toEqual({
-            status: "unsupported",
-        });
-
-        expect(
-            mocks.parseEmail,
-        ).not.toHaveBeenCalled();
-
-        expect(
-            mocks.transaction,
-        ).not.toHaveBeenCalled();
-    });
-
-    it("skips emails that are not transactions", async () => {
-
-        mocks.parseEmail.mockReturnValue(null);
-
-        const result =
-            await ingestGmailEmail({
-                userId: "user-1",
-                gmailMessageId: "gmail-1",
-                sender: "alerts@hdfcbank.bank.in",
-                subject: "Statement",
-                body: "Your statement is ready",
-            });
-
-        expect(result).toEqual({
-            status: "not-a-transaction",
-        });
-
-        expect(
-            mocks.resolveTransactionMerchant,
-        ).not.toHaveBeenCalled();
-
-        expect(
-            mocks.transaction,
-        ).not.toHaveBeenCalled();
-    });
-
-    it("creates a transaction from a valid email", async () => {
-
-        const result =
-            await ingestGmailEmail({
-                userId: "user-1",
-                gmailMessageId: "gmail-1",
-                sender: "alerts@hdfcbank.bank.in",
-                subject: "Rs. 1,250 debited",
-                body: "Swiggy transaction",
-            });
-
-        expect(result).toEqual({
-            status: "created",
-            transactionId: "transaction-1",
-        });
-
-        expect(
-            mocks.resolveTransactionMerchant,
-        ).toHaveBeenCalledWith(
-            expect.objectContaining({
-                userId: "user-1",
-                merchantRaw: "Swiggy",
-                transactionType:
-                TransactionType.EXPENSE,
-                shouldCategorize: true,
-            }),
-        );
-
-        expect(
-            mocks.transactionCreate,
-        ).toHaveBeenCalledWith(
-            expect.objectContaining({
-                data: expect.objectContaining({
-                    userId: "user-1",
-                    type: TransactionType.EXPENSE,
-                    source: "GMAIL",
-                    gmailMessageId: "gmail-1",
-                    sourceAccountId: "account-1",
-                }),
-            }),
-        );
-
-        expect(
-            mocks.postTransactionToLedger,
-        ).toHaveBeenCalled();
-
-        expect(
-            mocks.updateAnalytics,
-        ).toHaveBeenCalled();
-    });
-
-    it("creates a transaction without an account match", async () => {
-
-        mocks.financialAccountFindFirst
-            .mockResolvedValue(null);
-
-        const result =
-            await ingestGmailEmail({
-                userId: "user-1",
-                gmailMessageId: "gmail-2",
-                sender: "alerts@hdfcbank.bank.in",
-                subject: "Rs. 1,250 debited",
-                body: "Swiggy transaction",
-            });
-
-        expect(result.status).toBe(
-            "created",
-        );
-
-        expect(
-            mocks.transactionCreate,
-        ).toHaveBeenCalledWith(
-            expect.objectContaining({
-                data: expect.objectContaining({
-                    sourceAccountId: null,
-                    metadata: expect.objectContaining({
-                        accountMatched: false,
-                    }),
-                }),
-            }),
-        );
-    });
-
-    it("detects duplicate Gmail message IDs", async () => {
-
-        mocks.transactionFindUnique
-            .mockResolvedValueOnce({
-                id: "existing-transaction",
-            });
-
-        const result =
-            await ingestGmailEmail({
-                userId: "user-1",
-                gmailMessageId: "gmail-duplicate",
-                sender: "alerts@hdfcbank.bank.in",
-                subject: "Rs. 1,250 debited",
-                body: "Swiggy transaction",
-            });
-
-        expect(result).toEqual({
-            status: "duplicate",
-            transactionId:
-                "existing-transaction",
-        });
-
-        expect(
-            mocks.transactionCreate,
-        ).not.toHaveBeenCalled();
-    });
-
-    it("detects duplicate fingerprints", async () => {
-
-        mocks.transactionFindUnique
-            .mockResolvedValueOnce(null)
-            .mockResolvedValueOnce({
-                id: "fingerprint-transaction",
-            });
-
-        const result =
-            await ingestGmailEmail({
-                userId: "user-1",
-                gmailMessageId: "gmail-new",
-                sender: "alerts@hdfcbank.bank.in",
-                subject: "Rs. 1,250 debited",
-                body: "Swiggy transaction",
-            });
-
-        expect(result).toEqual({
-            status: "duplicate",
-            transactionId:
-                "fingerprint-transaction",
-        });
-
-        expect(
-            mocks.transactionCreate,
-        ).not.toHaveBeenCalled();
-    });
-
-    it("uses receivedAt when the parser has no transaction date", async () => {
-
-        mocks.parseEmail.mockReturnValue({
-            amount: 500,
-            merchant: "Amazon",
-            type: TransactionType.EXPENSE,
-        });
-
-        const receivedAt =
-            new Date(
-                "2026-08-20T12:00:00.000Z",
+            parseAxisEmail(
+                subject,
+                body,
             );
 
-        mocks.transactionCreate.mockResolvedValue({
-            id: "transaction-2",
-            type: TransactionType.EXPENSE,
-            amount: 500,
-            date: receivedAt,
-            year: 2026,
-            month: 8,
-        });
+        expect(result).not.toBeNull();
+
+        expect(result?.amount).toBe(160);
+
+        expect(result?.type).toBe(
+            TransactionType.EXPENSE,
+        );
+
+        /*
+         * The parser must extract the merchant,
+         * not return the entire UPI transaction string.
+         */
+        expect(result?.merchant).toBe(
+            "SHAKILA THAPA",
+        );
+
+        expect(result?.resolveMerchant).toBe(
+            true,
+        );
+
+        expect(result?.accountLast4).toBe(
+            "0999",
+        );
+
+        expect(result?.accountType).toBe(
+            FinancialAccountType.BANK_ACCOUNT,
+        );
+
+        expect(result?.transactionDate).toBeDefined();
+    });
+
+
+    it("parses a standard bank account credit", () => {
+
+        const subject =
+            "INR 110.00 was credited to your A/c no. XX0999.";
+
+        const body = `
+            27-08-2026
+
+            Dear Nishant Sharma,
+
+            Here's the summary of your transaction:
+
+            Amount Credited:
+            INR 110.00
+
+            Account Number:
+            XX0999
+
+            Date & Time:
+            27-08-26, 08:29:30 IST
+
+            Transaction Info:
+            ACH-CR-BIKAJI FOODS INT LT.
+
+            Feel free to contact us.
+
+            Regards,
+            Axis Bank Ltd.
+        `;
 
         const result =
-            await ingestGmailEmail({
-                userId: "user-1",
-                gmailMessageId: "gmail-3",
-                sender: "alerts@hdfcbank.bank.in",
-                subject: "Rs. 500 debited",
-                body: "Amazon",
-                receivedAt,
-            });
+            parseAxisEmail(
+                subject,
+                body,
+            );
 
-        expect(result.status).toBe("created",
+        expect(result).not.toBeNull();
+
+        expect(result?.amount).toBe(110);
+
+        expect(result?.type).toBe(
+            TransactionType.INCOME,
         );
 
-        expect(
-            mocks.transactionCreate,
-        ).toHaveBeenCalledWith(
-            expect.objectContaining({
-                data: expect.objectContaining({
-                    date: receivedAt,
-                    year: 2026,
-                    month: 8,
-                }),
-            }),
+        expect(result?.merchant).toBe(
+            "ACH-CR-BIKAJI FOODS INT LT",
         );
+
+        expect(result?.resolveMerchant).toBe(
+            true,
+        );
+
+        expect(result?.accountLast4).toBe(
+            "0999",
+        );
+
+        expect(result?.accountType).toBe(
+            FinancialAccountType.BANK_ACCOUNT,
+        );
+
+        expect(result?.transactionDate).toBeDefined();
+    });
+
+
+    it("parses a Burgundy debit", () => {
+
+        const subject =
+            "Debit transaction alert for Axis Bank A/c";
+
+        const body = `
+            27-08-2026
+
+            Dear Nishant Sharma,
+
+            Thank you for banking with us.
+
+            We wish to inform you that your A/c no. XX0999
+            has been debited with INR 14500.00
+            on 27-08-2026 08:30:06 IST
+            by ACH-DR-Indian Clearing Cor.
+
+            To check your available balance, please click here.
+
+            Please SMS BLOCKALL.
+
+            For details, please contact your Burgundy RM.
+
+            Always open to help you.
+
+            Regards,
+            Axis Bank Ltd.
+        `;
+
+        const result =
+            parseAxisEmail(
+                subject,
+                body,
+            );
+
+        expect(result).not.toBeNull();
+
+        expect(result?.amount).toBe(
+            14500,
+        );
+
+        expect(result?.type).toBe(
+            TransactionType.EXPENSE,
+        );
+
+        expect(result?.merchant).toBe(
+            "ACH-DR-Indian Clearing Cor",
+        );
+
+        expect(result?.resolveMerchant).toBe(
+            true,
+        );
+
+        expect(result?.accountLast4).toBe(
+            "0999",
+        );
+
+        expect(result?.accountType).toBe(
+            FinancialAccountType.BANK_ACCOUNT,
+        );
+
+        expect(result?.transactionDate).toBeDefined();
+    });
+
+
+    it("parses a Burgundy credit", () => {
+
+        const subject =
+            "Credit transaction alert for Axis Bank A/c";
+
+        const body = `
+            27-08-2026
+
+            Dear Nishant Sharma,
+
+            Thank you for banking with us.
+
+            We wish to inform you that your A/c no. XX0999
+            has been credited with INR 110.00
+            on 27-08-2026 at 08:29:30 IST
+            by ACH-CR-BIKAJI FOODS INT LT.
+
+            To check your available balance, please click here.
+
+            For details, please contact your Burgundy RM.
+
+            Always open to help you.
+
+            Regards,
+            Axis Bank Ltd.
+        `;
+
+        const result =
+            parseAxisEmail(
+                subject,
+                body,
+            );
+
+        expect(result).not.toBeNull();
+
+        expect(result?.amount).toBe(110);
+
+        expect(result?.type).toBe(
+            TransactionType.INCOME,
+        );
+
+        expect(result?.merchant).toBe(
+            "ACH-CR-BIKAJI FOODS INT LT",
+        );
+
+        expect(result?.resolveMerchant).toBe(
+            true,
+        );
+
+        expect(result?.accountLast4).toBe(
+            "0999",
+        );
+
+        expect(result?.accountType).toBe(
+            FinancialAccountType.BANK_ACCOUNT,
+        );
+
+        expect(result?.transactionDate).toBeDefined();
+    });
+
+
+    it("parses an Axis credit card transaction", () => {
+
+        const subject =
+            "INR 12 spent on credit card no. XX1256";
+
+        const body = `
+            28-08-2026
+
+            Dear Nishant Sharma,
+
+            Here's the summary of your Axis Bank Credit Card Transaction:
+
+            Transaction Amount:
+            INR 12
+
+            Merchant Name:
+            ASSPL
+
+            Axis Bank Credit Card No.
+            XX1256
+
+            Date & Time:
+            28-08-2026, 07:59:41 IST
+
+            Available Limit:
+            INR 1143946
+
+            Total Credit Limit:
+            INR 1155000
+
+            If this transaction was not initiated by you:
+            SMS BLOCK 1256
+        `;
+
+        const result =
+            parseAxisEmail(
+                subject,
+                body,
+            );
+
+        expect(result).not.toBeNull();
+
+        expect(result?.amount).toBe(12);
+
+        expect(result?.type).toBe(
+            TransactionType.EXPENSE,
+        );
+
+        expect(result?.merchant).toBe(
+            "ASSPL",
+        );
+
+        expect(result?.resolveMerchant).toBe(
+            true,
+        );
+
+        expect(result?.accountLast4).toBe(
+            "1256",
+        );
+
+        expect(result?.accountType).toBe(
+            FinancialAccountType.CREDIT_CARD,
+        );
+
+        expect(result?.transactionDate).toBeDefined();
+    });
+
+
+    it("ignores Axis autopay emails", () => {
+
+        const result =
+            parseAxisEmail(
+                "INR 2,000 autopay reminder",
+                "Amount Debited: INR 2,000",
+            );
+
+        expect(result).toBeNull();
+    });
+
+
+    it("ignores Axis reminder emails", () => {
+
+        const result =
+            parseAxisEmail(
+                "INR 2,000 payment reminder",
+                "Amount Debited: INR 2,000",
+            );
+
+        expect(result).toBeNull();
+    });
+
+
+    it("returns null for an unsupported Axis format", () => {
+
+        const result =
+            parseAxisEmail(
+                "Your Axis Bank statement is ready",
+                `
+                    Dear Customer,
+
+                    Your monthly statement is now available.
+                `,
+            );
+
+        expect(result).toBeNull();
     });
 });

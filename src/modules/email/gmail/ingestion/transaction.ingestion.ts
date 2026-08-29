@@ -8,6 +8,7 @@ import {updateAnalytics} from "../../../transactions/transaction.service";
 import {BankProvider, detectBankProvider} from "../detector/bank.detector";
 import {parseEmail} from "../parsers/parser.factory";
 import {resolveTransactionMerchant} from "../../../merchant/merchant.service";
+import {transactionInclude} from "../../../transactions/transaction.constants";
 
 export interface GmailEmailForIngestion {
     userId: string;
@@ -76,43 +77,16 @@ export const ingestGmailEmail = async (
     try {
 
         return await prisma.$transaction(async tx => {
-
-            //
-            // Fast duplicate checks.
-            //
             const existingByMessage =
                 await tx.transaction.findUnique({
                     where: {
-                        gmailMessageId: email.gmailMessageId,
+                        gmailMessageId:
+                        email.gmailMessageId,
                     },
                     select: {
                         id: true,
                     },
                 });
-
-            if (existingByMessage) {
-                return {
-                    status: "duplicate" as const,
-                    transactionId: existingByMessage.id,
-                };
-            }
-
-            const existingByFingerprint =
-                await tx.transaction.findUnique({
-                    where: {
-                        fingerprint,
-                    },
-                    select: {
-                        id: true,
-                    },
-                });
-
-            if (existingByFingerprint) {
-                return {
-                    status: "duplicate" as const,
-                    transactionId: existingByFingerprint.id,
-                };
-            }
 
             const sourceAccount =
                 parsed.accountLast4
@@ -133,6 +107,98 @@ export const ingestGmailEmail = async (
             const amount =
                 new Prisma.Decimal(parsed.amount);
 
+            /*
+             * Existing Gmail transaction.
+             *
+             * Re-run the parser and update the
+             * transaction with the latest parsed data.
+             */
+            if (existingByMessage) {
+                const transaction =
+                    await tx.transaction.update({
+                        where: {
+                            id: existingByMessage.id,
+                        },
+                        data: {
+                            type: parsed.type,
+                            amount,
+                            date,
+
+                            year: date.getFullYear(),
+                            month: date.getMonth() + 1,
+
+                            merchantId:
+                            merchant.merchantId,
+
+                            merchantRaw:
+                            merchant.merchantRaw,
+
+                            merchantNormalized:
+                            merchant.merchantNormalized,
+
+                            categoryId:
+                            merchant.categoryId,
+
+                            categoryAssignmentSource:
+                            merchant.categoryAssignmentSource,
+
+                            aiCategoryConfidence:
+                            merchant.confidence,
+
+                            sourceAccountId:
+                                sourceAccount?.id ?? null,
+
+                            fingerprint,
+
+                            metadata: {
+                                provider,
+                                parserVersion:
+                                PARSER_VERSION,
+
+                                accountLast4:
+                                    parsed.accountLast4 ??
+                                    null,
+
+                                accountType:
+                                    parsed.accountType ??
+                                    FinancialAccountType.CREDIT_CARD,
+
+                                accountMatched:
+                                    Boolean(sourceAccount),
+                            },
+                        },
+
+                        include: transactionInclude,
+                    });
+
+                return {
+                    status: "updated" as const,
+                    transactionId: transaction.id,
+                };
+            }
+
+            /*
+             * New transaction — check fingerprint
+             * before creating it.
+             */
+            const existingByFingerprint =
+                await tx.transaction.findUnique({
+                    where: {
+                        fingerprint,
+                    },
+                    select: {
+                        id: true,
+                    },
+                });
+
+            if (existingByFingerprint) {
+                return {
+                    status: "duplicate" as const,
+                    transactionId:
+                    existingByFingerprint.id,
+                };
+            }
+
             const transaction =
                 await tx.transaction.create({
                     data: {
@@ -145,16 +211,26 @@ export const ingestGmailEmail = async (
                         year: date.getFullYear(),
                         month: date.getMonth() + 1,
 
-                        merchantId: merchant.merchantId,
-                        merchantRaw: merchant.merchantRaw,
+                        merchantId:
+                        merchant.merchantId,
 
-                        categoryId: merchant.categoryId,
+                        merchantRaw:
+                        merchant.merchantRaw,
+
+                        merchantNormalized:
+                        merchant.merchantNormalized,
+
+                        categoryId:
+                        merchant.categoryId,
+
                         categoryAssignmentSource:
                         merchant.categoryAssignmentSource,
+
                         aiCategoryConfidence:
                         merchant.confidence,
 
-                        source: TransactionSource.GMAIL,
+                        source:
+                        TransactionSource.GMAIL,
 
                         sourceAccountId:
                             sourceAccount?.id ?? null,
@@ -166,7 +242,8 @@ export const ingestGmailEmail = async (
 
                         metadata: {
                             provider,
-                            parserVersion: PARSER_VERSION,
+                            parserVersion:
+                            PARSER_VERSION,
 
                             accountLast4:
                                 parsed.accountLast4 ??
@@ -180,6 +257,8 @@ export const ingestGmailEmail = async (
                                 Boolean(sourceAccount),
                         },
                     },
+
+                    include: transactionInclude,
                 });
 
             if (sourceAccount) {
@@ -225,7 +304,9 @@ export const ingestGmailEmail = async (
     }
 };
 
-export const processGmailMessage = async (gmailMessageId: string,) => {
+export const processGmailMessage = async (
+    gmailMessageId: string,
+) => {
     const gmailMessage =
         await prisma.gmailMessage.findUnique({
             where: {
@@ -242,22 +323,27 @@ export const processGmailMessage = async (gmailMessageId: string,) => {
         };
     }
 
-    try {
-        return await ingestGmailEmail({
-            userId: gmailMessage.gmailAccount.userId,
-            gmailMessageId: gmailMessage.gmailMessageId,
-            sender: gmailMessage.sender,
-            subject: gmailMessage.subject,
-            body: gmailMessage.body,
-            receivedAt:
-                gmailMessage.receivedAt ??
-                gmailMessage.createdAt,
-        });
-    } finally {
+    const result = await ingestGmailEmail({
+        userId: gmailMessage.gmailAccount.userId,
+        gmailMessageId: gmailMessage.gmailMessageId,
+        sender: gmailMessage.sender,
+        subject: gmailMessage.subject,
+        body: gmailMessage.body,
+        receivedAt:
+            gmailMessage.receivedAt ??
+            gmailMessage.createdAt,
+    });
+
+    if (
+        result.status !== "unsupported" &&
+        result.status !== "not-a-transaction"
+    ) {
         await prisma.gmailMessage.delete({
             where: {
                 id: gmailMessage.id,
             },
         });
     }
+
+    return result;
 };

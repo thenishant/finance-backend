@@ -210,25 +210,17 @@ export const resolveMerchant = async (
         resolvingMerchants.get(normalizedName);
 
     if (existing) {
-        console.info(
-            "[Merchant] Waiting for in-flight resolution",
-            {
-                merchant: normalizedName,
-            },
-        );
-
         return existing;
     }
 
     const promise =
         (async (): Promise<MerchantResolution> => {
-            console.info("[Merchant] Resolving", {
-                merchant: merchantName,
-                normalizedMerchant: normalizedName,
-            });
 
+            /*
+             * 1. Check canonical merchant name.
+             */
             const exactMerchant =
-                await findMerchantByName(merchantName);
+                await findMerchantByName(normalizedName);
 
             if (exactMerchant) {
                 return {
@@ -240,19 +232,12 @@ export const resolveMerchant = async (
             }
 
             /*
-             * First check aliases.
+             * 2. Check known alias.
              */
             const alias =
-                await findMerchantByAlias(
-                    normalizedName,
-                );
+                await findMerchantByAlias(normalizedName);
 
             if (alias) {
-                console.info("[Merchant] Alias hit", {
-                    alias: normalizedName,
-                    merchant: alias.merchant.name,
-                });
-
                 return {
                     merchant: alias.merchant,
                     normalizedName,
@@ -262,12 +247,12 @@ export const resolveMerchant = async (
             }
 
             /*
-             * Tests must never invoke OpenAI.
+             * 3. Test environment.
              */
             if (!AI_ENABLED) {
                 const merchant =
                     await getOrCreateMerchant(
-                        merchantName,
+                        normalizedName,
                     );
 
                 return {
@@ -279,42 +264,36 @@ export const resolveMerchant = async (
             }
 
             /*
-             * Production AI resolution.
+             * 4. AI resolution.
              */
-            console.info("[Merchant] Calling AI", {
-                merchant: merchantName,
-            });
-
             const aiResult =
                 await resolveMerchantWithAI(
                     merchantName,
                 );
 
-            console.info(
-                "[Merchant] AI resolved",
-                {
-                    merchant: aiResult.merchant,
-                    confidence:
-                    aiResult.confidence,
-                },
-            );
-
-            const merchant =
-                await getOrCreateMerchant(
+            const canonicalName =
+                normalizeMerchantName(
                     aiResult.merchant,
                 );
 
+            if (!canonicalName) {
+                throw new Error(
+                    "AI returned an invalid merchant.",
+                );
+            }
+
+            const merchant =
+                await getOrCreateMerchant(
+                    canonicalName,
+                );
+
+            /*
+             * Always remember the original
+             * normalized transaction value.
+             */
             await addAliasIfMissing(
                 merchant.id,
                 normalizedName,
-            );
-
-            console.info(
-                "[Merchant] Alias ready",
-                {
-                    alias: normalizedName,
-                    merchant: merchant.name,
-                },
             );
 
             return {

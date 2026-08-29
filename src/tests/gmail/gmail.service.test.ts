@@ -2,10 +2,11 @@ import {describe, expect, it} from "vitest";
 
 import {FinancialAccountType, TransactionType,} from "@prisma/client";
 import {BankProvider, detectBankProvider} from "../../modules/email/gmail/detector/bank.detector";
-import {parseAxisEmail, parseAxisSubject} from "../../modules/email/gmail/parsers/axis.parser";
 import {parseHdfcEmail, parseHdfcSubject} from "../../modules/email/gmail/parsers/hdfc.parser";
 import {parseEmail} from "../../modules/email/gmail/parsers/parser.factory";
 import {cleanEmailBody} from "../../modules/email/gmail/utils/body-cleaner";
+import {parseAxisEmail} from "../../modules/email/gmail/parsers/axis/axis.parser";
+import {parseAxisSubject} from "../../modules/email/gmail/parsers/axis.parser";
 
 describe("Gmail parsers", () => {
 
@@ -260,24 +261,45 @@ describe("Gmail parsers", () => {
 
     describe("parser factory", () => {
         it("uses the Axis parser", () => {
-            const result = parseEmail(
-                BankProvider.AXIS,
-                "INR 1,250 spent on your Axis Bank Credit Card",
-                `
-            Transaction Amount: INR 1,250
-            Merchant Name: Amazon
-            Axis Bank Credit Card No. XXXX 1234
-            Date & Time: 26-08-2026, 14:30:00
-        `,
-            );
+
+            const result =
+                parseEmail(
+                    BankProvider.AXIS,
+
+                    "INR 1,250 spent on your Axis Bank Credit Card",
+
+                    `
+                Transaction Amount: INR 1,250
+
+                Merchant Name:
+                Amazon
+
+                Axis Bank Credit Card No.
+                XXXX 1234
+
+                Date & Time:
+                26-08-2026, 14:30:00
+            `,
+                );
 
             expect(result).not.toBeNull();
-            expect(result?.amount).toBe(1250);
+
+            expect(result?.amount).toBe(
+                1250,
+            );
+
             expect(result?.type).toBe(
                 TransactionType.EXPENSE,
             );
-            expect(result?.merchant).toBe("Amazon");
-            expect(result?.accountLast4).toBe("1234");
+
+            expect(result?.merchant).toBe(
+                "Amazon",
+            );
+
+            expect(result?.accountLast4).toBe(
+                "1234",
+            );
+
             expect(result?.accountType).toBe(
                 FinancialAccountType.CREDIT_CARD,
             );
