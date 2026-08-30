@@ -15,12 +15,6 @@ import {categorizeMerchantWithAI, resolveMerchantWithAI,} from "./merchant.ai";
 import {normalizeMerchantName} from "./merchant.normalizer";
 
 /* -------------------------------------------------------------------------- */
-/*                              Configuration                                 */
-/* -------------------------------------------------------------------------- */
-
-const AI_ENABLED = process.env.APP_ENV !== "test";
-
-/* -------------------------------------------------------------------------- */
 /*                         In-flight request caches                            */
 /* -------------------------------------------------------------------------- */
 
@@ -79,9 +73,14 @@ export const getMerchantCategoryOptions = async (
     };
 
     return categories
-        .filter(category => !hasChildren.has(category.id))
+        .filter(
+            category =>
+                !hasChildren.has(category.id),
+        )
         .sort((a, b) =>
-            buildPath(a).localeCompare(buildPath(b)),
+            buildPath(a).localeCompare(
+                buildPath(b),
+            ),
         )
         .map(category => ({
             id: category.id,
@@ -153,16 +152,6 @@ export const findMerchantByAlias = (
 export const getOrCreateMerchant = async (
     name: string,
 ): Promise<Merchant> => {
-    /*
-     * Upsert avoids the find-then-create race:
-     *
-     * Request A -> find -> nothing
-     * Request B -> find -> nothing
-     * Request A -> create
-     * Request B -> create -> P2002
-     *
-     * Since merchant.name is unique, upsert is the cleanest solution.
-     */
     return prisma.merchant.upsert({
         where: {
             name,
@@ -194,6 +183,176 @@ export const addAliasIfMissing = (
 /*                           Merchant Resolution                              */
 /* -------------------------------------------------------------------------- */
 
+const resolveMerchantInternal = async (
+    merchantName: string,
+    normalizedName: string,
+): Promise<MerchantResolution> => {
+    /*
+     * 1. Check canonical merchant name.
+     */
+    const exactMerchant =
+        await findMerchantByName(
+            normalizedName,
+        );
+
+    if (exactMerchant) {
+        return {
+            merchant: exactMerchant,
+            normalizedName: exactMerchant.name,
+            confidence: 1,
+            fromCache: true,
+        };
+    }
+
+    /*
+     * 2. Check known alias.
+     */
+    const alias =
+        await findMerchantByAlias(
+            normalizedName,
+        );
+
+    if (alias) {
+        return {
+            merchant: alias.merchant,
+            normalizedName: alias.merchant.name,
+            confidence: 1,
+            fromCache: true,
+        };
+    }
+
+    /*
+     * 3. AI resolution.
+     *
+     * AI is intentionally called here even during tests.
+     * The test suite mocks resolveMerchantWithAI().
+     */
+    try {
+        console.info(
+            "[Merchant] Calling AI",
+            {
+                merchant: merchantName,
+            },
+        );
+
+        const aiResult =
+            await resolveMerchantWithAI(
+                merchantName,
+            );
+
+        const canonicalName =
+            normalizeMerchantName(
+                aiResult.merchant,
+            );
+
+        if (!canonicalName) {
+            throw new Error(
+                "AI returned an invalid merchant.",
+            );
+        }
+
+        const merchant =
+            await getOrCreateMerchant(
+                canonicalName,
+            );
+
+        /*
+         * Remember the original normalized
+         * transaction value as an alias.
+         */
+        await addAliasIfMissing(
+            merchant.id,
+            normalizedName,
+        );
+
+        console.info(
+            "[Merchant] AI resolved",
+            {
+                original: merchantName,
+                merchant: merchant.name,
+                confidence:
+                aiResult.confidence,
+            },
+        );
+
+        return {
+            merchant,
+            normalizedName: merchant.name,
+
+            /*
+             * Important:
+             *
+             * Do not use `|| 1` here.
+             *
+             * 0 is a valid AI confidence.
+             */
+            confidence:
+            aiResult.confidence,
+
+            fromCache: false,
+        };
+    } catch (error) {
+        /*
+         * AI failed.
+         *
+         * Do not lose the merchant.
+         * Use the normalized transaction value
+         * as the fallback merchant.
+         */
+        console.error(
+            "[Merchant] AI resolution failed",
+            {
+                merchant: merchantName,
+                normalizedMerchant:
+                normalizedName,
+                message:
+                    error instanceof Error
+                        ? error.message
+                        : String(error),
+                error,
+            },
+        );
+
+        const fallbackMerchant =
+            await getOrCreateMerchant(
+                normalizedName,
+            );
+
+        /*
+         * Remember this normalized value
+         * so future transactions can resolve
+         * without calling AI again.
+         */
+        await addAliasIfMissing(
+            fallbackMerchant.id,
+            normalizedName,
+        );
+
+        console.info(
+            "[Merchant] Using fallback merchant",
+            {
+                original: merchantName,
+                merchant:
+                fallbackMerchant.name,
+            },
+        );
+
+        return {
+            merchant: fallbackMerchant,
+            normalizedName:
+            fallbackMerchant.name,
+
+            /*
+             * AI failed, therefore confidence is
+             * explicitly zero.
+             */
+            confidence: 0,
+
+            fromCache: false,
+        };
+    }
+};
+
 export const resolveMerchant = async (
     merchantName: string,
 ): Promise<MerchantResolution> => {
@@ -206,103 +365,30 @@ export const resolveMerchant = async (
         );
     }
 
+    /*
+     * Check for an existing in-flight request.
+     */
     const existing =
-        resolvingMerchants.get(normalizedName);
+        resolvingMerchants.get(
+            normalizedName,
+        );
 
     if (existing) {
         return existing;
     }
 
+    /*
+     * Create the promise before putting it into
+     * the map.
+     *
+     * This gives concurrent callers the exact
+     * same promise.
+     */
     const promise =
-        (async (): Promise<MerchantResolution> => {
-
-            /*
-             * 1. Check canonical merchant name.
-             */
-            const exactMerchant =
-                await findMerchantByName(normalizedName);
-
-            if (exactMerchant) {
-                return {
-                    merchant: exactMerchant,
-                    normalizedName,
-                    confidence: 1,
-                    fromCache: true,
-                };
-            }
-
-            /*
-             * 2. Check known alias.
-             */
-            const alias =
-                await findMerchantByAlias(normalizedName);
-
-            if (alias) {
-                return {
-                    merchant: alias.merchant,
-                    normalizedName,
-                    confidence: 1,
-                    fromCache: true,
-                };
-            }
-
-            /*
-             * 3. Test environment.
-             */
-            if (!AI_ENABLED) {
-                const merchant =
-                    await getOrCreateMerchant(
-                        normalizedName,
-                    );
-
-                return {
-                    merchant,
-                    normalizedName,
-                    confidence: 1,
-                    fromCache: false,
-                };
-            }
-
-            /*
-             * 4. AI resolution.
-             */
-            const aiResult =
-                await resolveMerchantWithAI(
-                    merchantName,
-                );
-
-            const canonicalName =
-                normalizeMerchantName(
-                    aiResult.merchant,
-                );
-
-            if (!canonicalName) {
-                throw new Error(
-                    "AI returned an invalid merchant.",
-                );
-            }
-
-            const merchant =
-                await getOrCreateMerchant(
-                    canonicalName,
-                );
-
-            /*
-             * Always remember the original
-             * normalized transaction value.
-             */
-            await addAliasIfMissing(
-                merchant.id,
-                normalizedName,
-            );
-
-            return {
-                merchant,
-                normalizedName,
-                confidence: aiResult.confidence,
-                fromCache: false,
-            };
-        })();
+        resolveMerchantInternal(
+            merchantName,
+            normalizedName,
+        );
 
     resolvingMerchants.set(
         normalizedName,
@@ -312,9 +398,21 @@ export const resolveMerchant = async (
     try {
         return await promise;
     } finally {
-        resolvingMerchants.delete(
-            normalizedName,
-        );
+        /*
+         * Only remove our own promise.
+         *
+         * This prevents an older request from
+         * deleting a newer in-flight request.
+         */
+        if (
+            resolvingMerchants.get(
+                normalizedName,
+            ) === promise
+        ) {
+            resolvingMerchants.delete(
+                normalizedName,
+            );
+        }
     }
 };
 
@@ -330,6 +428,9 @@ export const categorizeMerchant = async ({
     const key =
         `${userId}:${merchant.id}:${transactionType}`;
 
+    /*
+     * Reuse an existing in-flight categorization.
+     */
     const existing =
         categorizingMerchants.get(key);
 
@@ -347,11 +448,8 @@ export const categorizeMerchant = async ({
     const promise =
         (async (): Promise<MerchantCategorizationResult> => {
             /*
-             * --------------------------------------------------------------
-             * Existing mapping
-             * --------------------------------------------------------------
+             * 1. Existing mapping.
              */
-
             const latestMapping =
                 await prisma.merchantMapping.findUnique({
                     where: {
@@ -374,11 +472,16 @@ export const categorizeMerchant = async ({
                     merchant,
                     category:
                     latestMapping.category,
+
                     confidence:
-                        latestMapping.confidence ?? 1,
+                        latestMapping.confidence ??
+                        1,
+
                     reasoning:
                         "Previously categorized.",
+
                     fromCache: true,
+
                     categoryAssignmentSource:
                         latestMapping.source ===
                         MerchantMappingSource.USER
@@ -388,11 +491,8 @@ export const categorizeMerchant = async ({
             }
 
             /*
-             * --------------------------------------------------------------
-             * Available categories
-             * --------------------------------------------------------------
+             * 2. Available categories.
              */
-
             const categoryOptions =
                 await getMerchantCategoryOptions(
                     userId,
@@ -406,55 +506,12 @@ export const categorizeMerchant = async ({
             }
 
             /*
-             * --------------------------------------------------------------
-             * Test environment
-             * --------------------------------------------------------------
+             * 3. AI categorization.
              *
-             * Select a real category.
-             * Never return category: null because the result contract
-             * requires Category.
+             * Do not bypass this in tests.
+             * categorizeMerchantWithAI is mocked
+             * by the test suite.
              */
-
-            if (!AI_ENABLED) {
-                const categoryOption =
-                    categoryOptions[0];
-
-                if (!categoryOption) {
-                    throw new Error(
-                        `No ${transactionType} categories found.`,
-                    );
-                }
-
-                const category =
-                    await getCategoryById(
-                        userId,
-                        categoryOption.id,
-                    );
-
-                if (!category) {
-                    throw new Error(
-                        "Test category not found.",
-                    );
-                }
-
-                return {
-                    merchant,
-                    category,
-                    confidence: 1,
-                    reasoning:
-                        "Test categorization.",
-                    fromCache: false,
-                    categoryAssignmentSource:
-                    CategoryAssignmentSource.AI,
-                };
-            }
-
-            /*
-             * --------------------------------------------------------------
-             * AI categorization
-             * --------------------------------------------------------------
-             */
-
             console.info(
                 "[Merchant] Categorizing",
                 {
@@ -471,11 +528,11 @@ export const categorizeMerchant = async ({
                 );
 
             /*
-             * --------------------------------------------------------------
-             * Validate AI category
-             * --------------------------------------------------------------
+             * 4. Validate AI category.
+             *
+             * The category must belong to the
+             * current user.
              */
-
             const category =
                 await getCategoryById(
                     userId,
@@ -483,6 +540,20 @@ export const categorizeMerchant = async ({
                 );
 
             if (!category) {
+                throw new Error(
+                    "AI returned an invalid category.",
+                );
+            }
+
+            /*
+             * Also make sure the category returned
+             * by the database has the requested
+             * transaction type.
+             */
+            if (
+                category.type !==
+                transactionType
+            ) {
                 throw new Error(
                     "AI returned an invalid category.",
                 );
@@ -499,11 +570,8 @@ export const categorizeMerchant = async ({
             );
 
             /*
-             * --------------------------------------------------------------
-             * Learn mapping
-             * --------------------------------------------------------------
+             * 5. Learn the mapping.
              */
-
             await learnMerchantCategory(
                 userId,
                 merchant.id,
@@ -515,11 +583,19 @@ export const categorizeMerchant = async ({
             return {
                 merchant,
                 category,
+
+                /*
+                 * Preserve the exact AI confidence,
+                 * including 0.
+                 */
                 confidence:
                 aiResult.confidence,
+
                 reasoning:
                 aiResult.reasoning,
+
                 fromCache: false,
+
                 categoryAssignmentSource:
                 CategoryAssignmentSource.AI,
             };
@@ -533,9 +609,17 @@ export const categorizeMerchant = async ({
     try {
         return await promise;
     } finally {
-        categorizingMerchants.delete(
-            key,
-        );
+        /*
+         * Only delete our own promise.
+         */
+        if (
+            categorizingMerchants.get(key) ===
+            promise
+        ) {
+            categorizingMerchants.delete(
+                key,
+            );
+        }
     }
 };
 
@@ -551,9 +635,13 @@ export const learnMerchantCategory = async (
     confidence = 1,
 ) => {
     /*
-     * Never overwrite a user's explicit mapping with AI.
+     * Never overwrite a user's explicit mapping
+     * with AI.
      */
-    if (source === MerchantMappingSource.AI) {
+    if (
+        source ===
+        MerchantMappingSource.AI
+    ) {
         const existing =
             await prisma.merchantMapping.findUnique({
                 where: {
@@ -661,10 +749,10 @@ export const resolveTransactionMerchant = async ({
             merchant: null,
             merchantId: null,
             merchantRaw: raw,
-            category: null,
-            categoryId: null,
             merchantNormalized:
                 normalizeMerchantName(raw),
+            category: null,
+            categoryId: null,
             categoryAssignmentSource:
             CategoryAssignmentSource.NONE,
             confidence: null,
@@ -672,21 +760,34 @@ export const resolveTransactionMerchant = async ({
     }
 
     /*
-     * Merchant resolution succeeded but categorization was not requested.
+     * Transfers should never be categorized.
+     *
+     * Merchant resolution is still performed because
+     * the transaction may have a useful merchant.
      */
-    if (!shouldCategorize) {
+    if (
+        !shouldCategorize ||
+        transactionType ===
+        TransactionType.TRANSFER
+    ) {
         return {
             merchant:
             resolvedMerchant.merchant,
+
             merchantId:
             resolvedMerchant.merchant.id,
+
             merchantRaw: raw,
+
             merchantNormalized:
             resolvedMerchant.normalizedName,
+
             category: null,
             categoryId: null,
+
             categoryAssignmentSource:
             CategoryAssignmentSource.NONE,
+
             confidence:
             resolvedMerchant.confidence,
         };
@@ -710,6 +811,9 @@ export const resolveTransactionMerchant = async ({
 
             merchantRaw: raw,
 
+            merchantNormalized:
+            resolvedMerchant.normalizedName,
+
             category:
             categorization.category,
 
@@ -721,9 +825,6 @@ export const resolveTransactionMerchant = async ({
 
             confidence:
             categorization.confidence,
-
-            merchantNormalized:
-            resolvedMerchant.normalizedName,
         };
     } catch (error) {
         console.error(
@@ -736,9 +837,8 @@ export const resolveTransactionMerchant = async ({
         );
 
         /*
-         * Categorization failure should not destroy the merchant
-         * resolution. The transaction layer can decide whether a
-         * category is required.
+         * Categorization failure should not destroy
+         * merchant resolution.
          */
         return {
             merchant:
@@ -762,4 +862,50 @@ export const resolveTransactionMerchant = async ({
             resolvedMerchant.confidence,
         };
     }
+};
+
+export const resolveManualTransactionMerchant = async ({
+                                                           merchantRaw,
+                                                       }: {
+    merchantRaw?: string | null;
+}): Promise<ResolveTransactionMerchantResult> => {
+    const raw = merchantRaw?.trim();
+
+    if (!raw) {
+        return {
+            merchant: null,
+            merchantId: null,
+            merchantRaw: null,
+            merchantNormalized: null,
+            category: null,
+            categoryId: null,
+            categoryAssignmentSource:
+            CategoryAssignmentSource.NONE,
+            confidence: null,
+        };
+    }
+
+    const normalizedName =
+        normalizeMerchantName(raw);
+
+    if (!normalizedName) {
+        throw new Error(
+            "Unable to normalize merchant name.",
+        );
+    }
+
+    const merchant =
+        await getOrCreateMerchant(normalizedName);
+
+    return {
+        merchant,
+        merchantId: merchant.id,
+        merchantRaw: raw,
+        merchantNormalized: merchant.name,
+        category: null,
+        categoryId: null,
+        categoryAssignmentSource:
+        CategoryAssignmentSource.NONE,
+        confidence: null,
+    };
 };

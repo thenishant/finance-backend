@@ -1,9 +1,12 @@
 import {TransactionType} from "@prisma/client";
 
-import {openai} from "../../lib/openai";
+import {getOpenAI} from "../../lib/openai";
+
 import {MerchantAIResponse, MerchantAIResult, MerchantCategoryOption,} from "./merchant.types";
 
-const MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
+const MODEL =
+    process.env.OPENAI_MODEL ??
+    "openai/gpt-oss-120b";
 
 /* -------------------------------------------------------------------------- */
 /*                         Merchant Resolution Prompt                         */
@@ -11,18 +14,26 @@ const MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1-mini";
 
 const MERCHANT_SYSTEM_PROMPT = `
 You are an expert at recognizing merchant names from financial transactions.
+
 Your task is to normalize a merchant into its canonical public brand.
+
 Examples:
+
 AMZN MKTPLACE
 → Amazon
+
 AMAZON SELLER SERVICES PRIVATE LIMITED
 → Amazon
+
 SWIGGY LIMITED
 → Swiggy
+
 FLIPKART INTERNET PRIVATE LIMITED
 → Flipkart
+
 NETFLIX.COM
 → Netflix
+
 Rules:
 1. Return the public brand only.
 2. Remove legal suffixes.
@@ -30,7 +41,9 @@ Rules:
 4. Never invent a merchant.
 5. Preserve correct capitalization.
 6. Confidence must be between 0 and 1.
-7. Return ONLY valid JSON.
+7. If the merchant cannot be confidently identified, return the original merchant value.
+8. Return ONLY valid JSON.
+
 Return format:
 {
     "merchant": "Amazon",
@@ -44,33 +57,74 @@ Return format:
 
 const CATEGORY_SYSTEM_PROMPT = `
 You are an expert financial transaction categorization assistant.
+
 Your task is to classify a merchant into ONE existing category.
-You will receive a list of leaf categories. Each category has:
-- id (must be returned exactly as provided)
-- path (full hierarchy)
+
+You will receive a list of leaf categories.
+
+Each category contains:
+- id
+- path
+
+The category id MUST be returned exactly as provided.
+
 Examples:
+
 Transport > Fuel
 Transport > Fastag
 Food > Restaurants
 Food > Groceries
+
 Rules:
 1. Select exactly ONE category.
 2. Always choose the MOST SPECIFIC category.
 3. Never invent or modify category IDs.
 4. Never return a parent category.
-5. Use the full path to understand the context.
+5. Use the full path to understand the category context.
 6. If multiple categories seem suitable, choose the closest semantic match.
 7. Confidence must be between 0 and 1.
-8. Return ONLY valid JSON.
-9. Do not guess a specific category without reasonable evidence.
+8. Do not guess a specific category without reasonable evidence.
+9. Return ONLY valid JSON.
 
 Return format:
 {
-    "categoryId":"...",
-    "confidence":0.97,
-    "reasoning":"..."
+    "categoryId": "...",
+    "confidence": 0.97,
+    "reasoning": "..."
 }
 `;
+
+/* -------------------------------------------------------------------------- */
+/*                           Helpers                                          */
+/* -------------------------------------------------------------------------- */
+
+const clampConfidence = (
+    confidence: unknown,
+): number => {
+    if (typeof confidence !== "number") {
+        return 0;
+    }
+
+    if (Number.isNaN(confidence)) {
+        return 0;
+    }
+
+    return Math.max(
+        0,
+        Math.min(1, confidence),
+    );
+};
+
+const parseJSON = <T>(
+    text: string,
+    errorMessage: string,
+): T => {
+    try {
+        return JSON.parse(text) as T;
+    } catch {
+        throw new Error(errorMessage);
+    }
+};
 
 /* -------------------------------------------------------------------------- */
 /*                           Resolve Merchant (AI)                            */
@@ -79,57 +133,80 @@ Return format:
 export const resolveMerchantWithAI = async (
     merchantName: string,
 ): Promise<MerchantAIResponse> => {
-
-    const response = await openai.chat.completions.create({
-        model: MODEL,
-        temperature: 0,
-        response_format: {
-            type: "json_object",
+    console.info(
+        "[Merchant AI] Resolving merchant",
+        {
+            merchantName,
+            model: MODEL,
         },
-        messages: [
+    );
+
+    let response;
+
+    try {
+        response =
+            await getOpenAI().chat.completions.create({
+                model: MODEL,
+                temperature: 0,
+                response_format: {
+                    type: "json_object",
+                },
+                messages: [
+                    {
+                        role: "system",
+                        content:
+                        MERCHANT_SYSTEM_PROMPT,
+                    },
+                    {
+                        role: "user",
+                        content: merchantName,
+                    },
+                ],
+            });
+    } catch (error) {
+        console.error(
+            "[Merchant AI] API request failed",
             {
-                role: "system",
-                content: MERCHANT_SYSTEM_PROMPT,
+                merchantName,
+                model: MODEL,
+                error,
             },
-            {
-                role: "user",
-                content: merchantName,
-            },
-        ],
-    });
+        );
+
+        throw error;
+    }
 
     const text =
         response.choices[0]?.message?.content?.trim();
 
     if (!text) {
-        throw new Error("OpenAI returned an empty response.");
+        throw new Error(
+            "OpenAI returned an empty response.",
+        );
     }
 
-    let result: MerchantAIResponse;
+    const result =
+        parseJSON<MerchantAIResponse>(
+            text,
+            "Failed to parse merchant AI response.",
+        );
 
-    try {
-        result = JSON.parse(text);
-    } catch {
-        throw new Error("Failed to parse merchant AI response.");
-    }
-
-    if (!result.merchant) {
+    if (
+        typeof result.merchant !== "string" ||
+        !result.merchant.trim()
+    ) {
         return {
             merchant: merchantName,
             confidence: 0,
         };
     }
 
-    if (typeof result.confidence !== "number") {
-        result.confidence = 0;
-    }
-
-    result.confidence = Math.max(
-        0,
-        Math.min(1, result.confidence),
-    );
-
-    return result;
+    return {
+        merchant: result.merchant.trim(),
+        confidence: clampConfidence(
+            result.confidence,
+        ),
+    };
 };
 
 /* -------------------------------------------------------------------------- */
@@ -141,11 +218,11 @@ export const categorizeMerchantWithAI = async (
     transactionType: TransactionType,
     categoryOptions: MerchantCategoryOption[],
 ): Promise<MerchantAIResult> => {
-
-    const availableCategories = categoryOptions.map(category => ({
-        id: category.id,
-        path: category.path,
-    }));
+    const availableCategories =
+        categoryOptions.map((category) => ({
+            id: category.id,
+            path: category.path,
+        }));
 
     const prompt = `
 Transaction Type:
@@ -155,62 +232,105 @@ Merchant:
 ${merchantName}
 
 Available Categories:
-${JSON.stringify(availableCategories, null, 2)}
+${JSON.stringify(
+        availableCategories,
+        null,
+        2,
+    )}
 
 Return ONLY valid JSON.
 `;
 
-    const response = await openai.chat.completions.create({
-        model: MODEL,
-        temperature: 0,
-        response_format: {
-            type: "json_object",
+    console.info(
+        "[Merchant AI] Categorizing merchant",
+        {
+            merchantName,
+            transactionType,
+            categoryCount:
+            availableCategories.length,
+            model: MODEL,
         },
-        messages: [
+    );
+
+    let response;
+
+    try {
+        response =
+            await getOpenAI().chat.completions.create({
+                model: MODEL,
+                temperature: 0,
+                response_format: {
+                    type: "json_object",
+                },
+                messages: [
+                    {
+                        role: "system",
+                        content:
+                        CATEGORY_SYSTEM_PROMPT,
+                    },
+                    {
+                        role: "user",
+                        content: prompt,
+                    },
+                ],
+            });
+    } catch (error) {
+        console.error(
+            "[Merchant AI] Categorization API request failed",
             {
-                role: "system",
-                content: CATEGORY_SYSTEM_PROMPT,
+                merchantName,
+                transactionType,
+                model: MODEL,
+                error,
             },
-            {
-                role: "user",
-                content: prompt,
-            },
-        ],
-    });
+        );
+
+        throw error;
+    }
 
     const text =
         response.choices[0]?.message?.content?.trim();
 
     if (!text) {
-        throw new Error("OpenAI returned an empty response.");
+        throw new Error(
+            "OpenAI returned an empty category response.",
+        );
     }
 
-    let result: MerchantAIResult;
+    const result =
+        parseJSON<MerchantAIResult>(
+            text,
+            "Failed to parse category AI response.",
+        );
 
-    try {
-        result = JSON.parse(text);
-    } catch {
-        throw new Error("Failed to parse category AI response.");
+    if (
+        typeof result.categoryId !== "string" ||
+        !result.categoryId.trim()
+    ) {
+        throw new Error(
+            "AI did not return a category.",
+        );
     }
 
-    if (!result.categoryId) {
-        throw new Error("AI did not return a category.");
-    }
+    result.categoryId =
+        result.categoryId.trim();
 
-    if (typeof result.confidence !== "number") {
-        result.confidence = 0;
-    }
+    result.confidence =
+        clampConfidence(
+            result.confidence,
+        );
 
-    result.confidence = Math.max(
-        0,
-        Math.min(1, result.confidence),
-    );
+    result.reasoning =
+        typeof result.reasoning === "string"
+            ? result.reasoning.trim()
+            : "";
 
-    result.reasoning ??= "";
-
-    const valid = availableCategories.some(
-        category => category.id === result.categoryId,
-    );
+    const valid =
+        availableCategories.some(
+            (category) =>
+                category.id ===
+                result.categoryId,
+        );
 
     if (!valid) {
         throw new Error(

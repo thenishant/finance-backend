@@ -1,10 +1,20 @@
 import OpenAI from "openai";
 
-// export const openai = new OpenAI({
-//     apiKey: process.env.OPENAI_API_KEY,
-// });
+let client: OpenAI | null = null;
 
-export const openai = new OpenAI({
-    apiKey: process.env.GROQ_API_KEY,
-    baseURL: "https://api.groq.com/openai/v1",
-});
+export const getOpenAI = () => {
+    if (!client) {
+        const apiKey = process.env.GROQ_API_KEY;
+
+        if (!apiKey) {
+            throw new Error("GROQ_API_KEY is not configured.");
+        }
+
+        client = new OpenAI({
+            apiKey,
+            baseURL: "https://api.groq.com/openai/v1",
+        });
+    }
+
+    return client;
+};

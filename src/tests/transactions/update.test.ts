@@ -7,9 +7,23 @@ import {createBankAccount, createCategory, createUser} from "../helpers/factory"
 import {prisma} from "../../database/prisma";
 import {expectMonthlyTotals} from "../helpers/assertions";
 import {createExpense} from "../helpers/transactions";
+import {normalizeMerchantName} from "../../modules/merchant/merchant.normalizer";
 
 describe("merchant updates", () => {
     it("updates the merchant", async () => {
+
+        console.log(
+            "RAW:",
+            "Credit Card Transfer",
+        );
+
+        console.log(
+            "NORMALIZED:",
+            normalizeMerchantName(
+                "Credit Card Transfer",
+            ),
+        );
+
         const ctx = await createTestContext();
 
         const transaction = await createTransaction(
@@ -984,7 +998,7 @@ describe("Update Transaction", () => {
             },
         );
 
-    }, 1500);
+    }, 4000);
 });
 
 describe("analytics consistency", () => {

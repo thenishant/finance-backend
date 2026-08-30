@@ -441,7 +441,6 @@ export const getTransactionById = async (
     userId: string,
     transactionId: string,
 ) => {
-
     const transaction =
         await prisma.transaction.findFirst({
             where: {

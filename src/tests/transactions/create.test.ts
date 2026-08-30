@@ -550,7 +550,7 @@ describe("Create Transaction", () => {
 
             expect(
                 transaction.merchantNormalized,
-            ).toBe("amazon");
+            ).toBe("Amazon");
         });
 
 
