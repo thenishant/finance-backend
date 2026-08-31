@@ -1,7 +1,4 @@
-import {
-    FinancialAccountType,
-    TransactionType,
-} from "@prisma/client";
+import {FinancialAccountType, TransactionType,} from "@prisma/client";
 import {describe, expect, it} from "vitest";
 
 import {parseAxisEmail} from "../../modules/email/gmail/parsers/axis/axis.parser";
@@ -53,6 +50,38 @@ describe("Axis email parser", () => {
             });
 
             expect(result?.transactionDate).toBeInstanceOf(Date);
+        });
+        it("parses Axis UPI/P2A transaction info without footer text", () => {
+            const subject =
+                "INR 3000.00 was credited to your A/c.";
+
+            const body = `
+        Amount Credited: INR 3000.00
+        Account Number: XX0999
+        Date & Time: 30-08-26, 21:54:13 IST
+        Transaction Info: UPI/P2A/624207512807/DEEPANSHU/SBIN/Birt
+
+        Feel free to connect with us for any clarification.
+        Call us at:
+        18001035577 (Toll Free)
+        18604195555 (Charges Applicable)
+
+        Always open to help you.
+        Regards,
+        Axis Bank Ltd.
+    `;
+
+            const result =
+                parseAxisEmail(
+                    subject,
+                    body,
+                );
+
+            expect(result).not.toBeNull();
+
+            expect(result?.merchant).toBe(
+                "DEEPANSHU",
+            );
         });
     });
 

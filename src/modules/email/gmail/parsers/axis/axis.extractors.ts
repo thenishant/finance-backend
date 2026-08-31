@@ -5,6 +5,10 @@ import {createISTDate,} from "../../../../../date";
 /* Merchant cleanup                                                           */
 /* -------------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------------- */
+/* Merchant cleanup                                                           */
+/* -------------------------------------------------------------------------- */
+
 const cleanAxisMerchant = (
     value: string,
 ): string | null => {
@@ -13,35 +17,91 @@ const cleanAxisMerchant = (
         .trim();
 
     /*
-     * Gmail sometimes removes line breaks and joins the next sentence
-     * to the transaction value.
+     * Axis/Gmail can join the transaction value with
+     * the email footer.
      *
-     * Example:
+     * Examples:
      *
      * ACH-CR-BIKAJI FOODS INT LT. Feel free to contact us.
      *
-     * We only want:
+     * Birt Feel free to connect with us for any clarification.
      *
-     * ACH-CR-BIKAJI FOODS INT LT
+     * We only want the transaction/counterparty part.
      */
-
     merchant = merchant.replace(
-        /\s+(?:Feel\s+free\s+to\s+contact|To\s+check\s+your\s+available\s+balance|For\s+details|Always\s+open\s+to\s+help|Regards)\b.*$/i,
+        /\s+(?:Feel\s+free\s+to\s+(?:contact|connect)\b|To\s+check\s+your\s+available\s+balance|For\s+details|Always\s+open\s+to\s+help|Regards|Reach\s+us\s+at|Copyright|Please\s+do\s+not)\b.*$/i,
         "",
     );
 
     /*
      * Remove trailing punctuation.
-     *
-     * ACH-DR-Indian Clearing Cor.
-     * ->
-     * ACH-DR-Indian Clearing Cor
      */
     merchant = merchant
         .replace(/[.!?]+$/, "")
         .trim();
 
     return merchant || null;
+};
+
+
+/* -------------------------------------------------------------------------- */
+/* Standard Account Transaction Info                                          */
+/* -------------------------------------------------------------------------- */
+
+export const extractAxisTransactionInfo = (
+    body: string,
+): string | null => {
+    const match = body.match(
+        /Transaction\s+Info\s*:\s*([\s\S]*?)(?=\s*(?:If\s+this\s+transaction|To\s+block|For\s+details|Feel\s+free\s+to\s+(?:contact|connect)|Regards|Reach\s+us\s+at|Copyright|Please\s+do\s+not)\b|$)/i,
+    );
+
+    if (!match?.[1]) {
+        return null;
+    }
+
+    let value = match[1]
+        .replace(/\s+/g, " ")
+        .trim();
+
+    /*
+     * UPI transaction format:
+     *
+     * UPI/P2M/660615862577/SHAKILA THAPA
+     * UPI/P2A/624207512807/DEEPANSHU/SBIN/Birt
+     *
+     * Expected:
+     *
+     * [0] UPI
+     * [1] P2M/P2A
+     * [2] transaction reference
+     * [3] counterparty
+     *
+     * We only want the counterparty.
+     */
+    if (/^UPI\s*\//i.test(value)) {
+        const parts = value
+            .split("/")
+            .map(part => part.trim())
+            .filter(Boolean);
+
+        value = parts[3] ?? "";
+    }
+
+    /*
+     * POS identifiers such as:
+     *
+     * pos.11329019@indus
+     *
+     * don't contain a meaningful merchant name.
+     * Don't send these to AI as merchants.
+     */
+    if (
+        /^pos\.\d+@(?:indus|[a-z0-9.-]+)$/i.test(value)
+    ) {
+        return null;
+    }
+
+    return cleanAxisMerchant(value);
 };
 
 
@@ -103,50 +163,6 @@ export const extractAxisAccountLast4 = (
 
     return match?.[1] ?? null;
 };
-
-
-/* -------------------------------------------------------------------------- */
-/* Standard Account Transaction Info                                          */
-/* -------------------------------------------------------------------------- */
-
-export const extractAxisTransactionInfo = (
-    body: string,
-): string | null => {
-    const match = body.match(
-        /Transaction\s+Info\s*:\s*([\s\S]*?)(?=\b(?:If\s+this\s+transaction|To\s+block|For\s+details|Regards|Reach\s+us\s+at|Copyright|Please\s+do\s+not)\b|$)/i,
-    );
-
-    if (!match?.[1]) {
-        return null;
-    }
-
-    let value = match[1]
-        .replace(/\s+/g, " ")
-        .trim();
-
-    /*
-     * UPI transaction:
-     *
-     * UPI/P2M/660615862577/SHAKILA THAPA
-     *
-     * We only want the final component:
-     *
-     * SHAKILA THAPA
-     */
-
-    if (/^UPI\//i.test(value)) {
-        const parts = value
-            .split("/")
-            .map(part => part.trim())
-            .filter(Boolean);
-
-        value =
-            parts.at(-1) ?? "";
-    }
-
-    return cleanAxisMerchant(value);
-};
-
 
 /* -------------------------------------------------------------------------- */
 /* Credit Card Merchant                                                       */
@@ -255,7 +271,7 @@ export const parseAxisDate = (
 
     return createISTDate(
         year,
-        month,
+        month - 1,
         day,
         hour,
         minute,

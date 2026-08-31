@@ -243,13 +243,9 @@ describe("Axis extractors", () => {
                 "20:40:27",
             );
 
-            expect(result).toBeInstanceOf(Date);
-            expect(result?.getFullYear()).toBe(2026);
-            expect(result?.getMonth()).toBe(8);
-            expect(result?.getDate()).toBe(28);
-            expect(result?.getHours()).toBe(20);
-            expect(result?.getMinutes()).toBe(40);
-            expect(result?.getSeconds()).toBe(27);
+            expect(result).toEqual(
+                new Date("2026-08-28T20:40:27+05:30"),
+            );
         });
 
         it("parses a two digit year", () => {
@@ -258,8 +254,9 @@ describe("Axis extractors", () => {
                 "20:40:27",
             );
 
-            expect(result).toBeInstanceOf(Date);
-            expect(result?.getFullYear()).toBe(2026);
+            expect(result).toEqual(
+                new Date("2026-08-28T20:40:27+05:30"),
+            );
         });
 
         it("returns undefined for invalid date", () => {
@@ -288,13 +285,9 @@ describe("Axis extractors", () => {
                 "Date & Time: 28-08-2026, 07:59:41 IST",
             );
 
-            expect(result).toBeInstanceOf(Date);
-            expect(result?.getFullYear()).toBe(2026);
-            expect(result?.getMonth()).toBe(8);
-            expect(result?.getDate()).toBe(28);
-            expect(result?.getHours()).toBe(7);
-            expect(result?.getMinutes()).toBe(59);
-            expect(result?.getSeconds()).toBe(41);
+            expect(result).toEqual(
+                new Date("2026-08-28T07:59:41+05:30"),
+            );
         });
 
         it("supports two digit year", () => {
@@ -302,8 +295,9 @@ describe("Axis extractors", () => {
                 "Date & Time: 28-08-26, 20:40:27 IST",
             );
 
-            expect(result).toBeInstanceOf(Date);
-            expect(result?.getFullYear()).toBe(2026);
+            expect(result).toEqual(
+                new Date("2026-08-28T20:40:27+05:30"),
+            );
         });
 
         it("supports 'at' before time", () => {
@@ -311,10 +305,9 @@ describe("Axis extractors", () => {
                 "27-08-2026 at 08:29:30 IST",
             );
 
-            expect(result).toBeInstanceOf(Date);
-            expect(result?.getHours()).toBe(8);
-            expect(result?.getMinutes()).toBe(29);
-            expect(result?.getSeconds()).toBe(30);
+            expect(result).toEqual(
+                new Date("2026-08-27T08:29:30+05:30"),
+            );
         });
 
         it("returns undefined when date is absent", () => {
@@ -323,6 +316,51 @@ describe("Axis extractors", () => {
                     "No date information",
                 ),
             ).toBeUndefined();
+        });
+    });
+    describe("extractAxisTransactionInfo", () => {
+        it("extracts the counterparty from UPI P2M transactions", () => {
+            const body = `
+            Transaction Info: UPI/P2M/660615862577/SHAKILA THAPA
+            If this transaction was not initiated by you
+        `;
+
+            expect(
+                extractAxisTransactionInfo(body),
+            ).toBe("SHAKILA THAPA");
+        });
+
+        it("extracts the counterparty from UPI P2A transactions", () => {
+            const body = `
+            Transaction Info: UPI/P2A/624207512807/DEEPANSHU/SBIN/Birt
+            If this transaction was not initiated by you
+        `;
+
+            expect(
+                extractAxisTransactionInfo(body),
+            ).toBe("DEEPANSHU");
+        });
+
+        it("extracts a multi-word UPI counterparty", () => {
+            const body = `
+            Transaction Info: UPI/P2A/623545792613/BAJARANGI KUMAR
+            If this transaction was not initiated by you
+        `;
+
+            expect(
+                extractAxisTransactionInfo(body),
+            ).toBe("BAJARANGI KUMAR");
+        });
+
+        it("returns null for an uninformative POS identifier", () => {
+            const body = `
+            Transaction Info: pos.11329019@indus
+            If this transaction was not initiated by you
+        `;
+
+            expect(
+                extractAxisTransactionInfo(body),
+            ).toBeNull();
         });
     });
 });

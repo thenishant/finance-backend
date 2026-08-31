@@ -1,4 +1,10 @@
-import {Category, CategoryAssignmentSource, Merchant, MerchantMappingSource, TransactionType,} from "@prisma/client";
+import {
+    Category,
+    CategoryAssignmentSource,
+    Merchant,
+    MerchantMappingSource,
+    TransactionType,
+} from "@prisma/client";
 
 import {prisma} from "../../database/prisma";
 
@@ -10,7 +16,10 @@ import {
     ResolveTransactionMerchantResult,
 } from "./merchant.types";
 
-import {categorizeMerchantWithAI, resolveMerchantWithAI,} from "./merchant.ai";
+import {
+    categorizeMerchantWithAI,
+    resolveMerchantWithAI,
+} from "./merchant.ai";
 
 import {normalizeMerchantName} from "./merchant.normalizer";
 
@@ -223,9 +232,6 @@ const resolveMerchantInternal = async (
 
     /*
      * 3. AI resolution.
-     *
-     * AI is intentionally called here even during tests.
-     * The test suite mocks resolveMerchantWithAI().
      */
     try {
         console.info(
@@ -280,8 +286,6 @@ const resolveMerchantInternal = async (
             normalizedName: merchant.name,
 
             /*
-             * Important:
-             *
              * Do not use `|| 1` here.
              *
              * 0 is a valid AI confidence.
@@ -378,8 +382,8 @@ export const resolveMerchant = async (
     }
 
     /*
-     * Create the promise before putting it into
-     * the map.
+     * Create the promise before putting it
+     * into the map.
      *
      * This gives concurrent callers the exact
      * same promise.
@@ -400,9 +404,6 @@ export const resolveMerchant = async (
     } finally {
         /*
          * Only remove our own promise.
-         *
-         * This prevents an older request from
-         * deleting a newer in-flight request.
          */
         if (
             resolvingMerchants.get(
@@ -507,10 +508,6 @@ export const categorizeMerchant = async ({
 
             /*
              * 3. AI categorization.
-             *
-             * Do not bypass this in tests.
-             * categorizeMerchantWithAI is mocked
-             * by the test suite.
              */
             console.info(
                 "[Merchant] Categorizing",
@@ -529,9 +526,6 @@ export const categorizeMerchant = async ({
 
             /*
              * 4. Validate AI category.
-             *
-             * The category must belong to the
-             * current user.
              */
             const category =
                 await getCategoryById(
@@ -546,9 +540,8 @@ export const categorizeMerchant = async ({
             }
 
             /*
-             * Also make sure the category returned
-             * by the database has the requested
-             * transaction type.
+             * Make sure the category belongs to
+             * the current transaction type.
              */
             if (
                 category.type !==
@@ -585,7 +578,7 @@ export const categorizeMerchant = async ({
                 category,
 
                 /*
-                 * Preserve the exact AI confidence,
+                 * Preserve exact AI confidence,
                  * including 0.
                  */
                 confidence:
@@ -709,11 +702,25 @@ export const resolveTransactionMerchant = async ({
                                                      merchantRaw,
                                                      transactionType,
                                                      shouldCategorize = true,
+                                                     requireCategory = false,
                                                  }: {
     userId: string;
     merchantRaw?: string | null;
     transactionType: TransactionType;
+
+    /*
+     * Whether categorization should be attempted.
+     */
     shouldCategorize?: boolean;
+
+    /*
+     * Whether categorization failure should be
+     * allowed to continue.
+     *
+     * This should be TRUE for Gmail-imported
+     * non-transfer transactions.
+     */
+    requireCategory?: boolean;
 }): Promise<ResolveTransactionMerchantResult> => {
     const raw = merchantRaw?.trim();
 
@@ -744,6 +751,16 @@ export const resolveTransactionMerchant = async ({
                 error,
             },
         );
+
+        /*
+         * Merchant resolution itself failed.
+         *
+         * If the caller requires a category,
+         * fail the entire operation.
+         */
+        if (requireCategory) {
+            throw error;
+        }
 
         return {
             merchant: null,
@@ -802,6 +819,18 @@ export const resolveTransactionMerchant = async ({
                 transactionType,
             });
 
+        /*
+         * Defensive invariant:
+         *
+         * A successful categorization MUST have
+         * a category ID.
+         */
+        if (!categorization.category?.id) {
+            throw new Error(
+                `Merchant categorization returned no category for "${raw}".`,
+            );
+        }
+
         return {
             merchant:
             resolvedMerchant.merchant,
@@ -837,8 +866,23 @@ export const resolveTransactionMerchant = async ({
         );
 
         /*
-         * Categorization failure should not destroy
-         * merchant resolution.
+         * IMPORTANT:
+         *
+         * Gmail-imported transactions require
+         * a category.
+         *
+         * Therefore do NOT silently return
+         * categoryId: null when requireCategory
+         * is true.
+         */
+        if (requireCategory) {
+            throw error;
+        }
+
+        /*
+         * For callers that explicitly allow
+         * uncategorized transactions, preserve
+         * the old fallback behavior.
          */
         return {
             merchant:
@@ -864,6 +908,10 @@ export const resolveTransactionMerchant = async ({
     }
 };
 
+/* -------------------------------------------------------------------------- */
+/*                    Manual Transaction Merchant Resolution                  */
+/* -------------------------------------------------------------------------- */
+
 export const resolveManualTransactionMerchant = async ({
                                                            merchantRaw,
                                                        }: {
@@ -871,6 +919,9 @@ export const resolveManualTransactionMerchant = async ({
 }): Promise<ResolveTransactionMerchantResult> => {
     const raw = merchantRaw?.trim();
 
+    /*
+     * No merchant supplied.
+     */
     if (!raw) {
         return {
             merchant: null,
@@ -885,27 +936,56 @@ export const resolveManualTransactionMerchant = async ({
         };
     }
 
-    const normalizedName =
-        normalizeMerchantName(raw);
-
-    if (!normalizedName) {
-        throw new Error(
-            "Unable to normalize merchant name.",
-        );
-    }
+    /*
+     * Manual merchant input is authoritative.
+     *
+     * Do NOT call:
+     *
+     *   normalizeMerchantName()
+     *   resolveMerchant()
+     *   resolveMerchantWithAI()
+     *
+     * Example:
+     *
+     *   "Credit Card Transfer"
+     *
+     * must remain:
+     *
+     *   "Credit Card Transfer"
+     */
 
     const merchant =
-        await getOrCreateMerchant(normalizedName);
+        await prisma.merchant.upsert({
+            where: {
+                name: raw,
+            },
+
+            update: {},
+
+            create: {
+                name: raw,
+            },
+        });
 
     return {
         merchant,
-        merchantId: merchant.id,
-        merchantRaw: raw,
-        merchantNormalized: merchant.name,
+
+        merchantId:
+        merchant.id,
+
+        merchantRaw:
+        raw,
+
+        merchantNormalized:
+        merchant.name,
+
         category: null,
+
         categoryId: null,
+
         categoryAssignmentSource:
         CategoryAssignmentSource.NONE,
+
         confidence: null,
     };
 };

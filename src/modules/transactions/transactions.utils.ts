@@ -318,7 +318,10 @@ export async function validateTransactionCategory({
  * The user's merchant value is authoritative.
  */
 export async function resolveNewTransactionMerchant({
+                                                        userId,
                                                         merchantRaw,
+                                                        transactionType,
+                                                        categoryId,
                                                     }: {
     userId: string;
     merchantRaw?: string | null;
@@ -326,11 +329,87 @@ export async function resolveNewTransactionMerchant({
     categoryId?: string | null;
 }): Promise<ResolveTransactionMerchantResult> {
 
-    return resolveManualTransactionMerchant({
-        merchantRaw,
-    });
-}
+    const raw = merchantRaw?.trim();
 
+    /*
+     * No merchant.
+     */
+    if (!raw) {
+        return {
+            merchant: null,
+            merchantId: null,
+            merchantRaw: null,
+            merchantNormalized: null,
+            category: null,
+            categoryId: null,
+            categoryAssignmentSource:
+            CategoryAssignmentSource.NONE,
+            confidence: null,
+        };
+    }
+
+    /*
+     * MANUAL TRANSACTION
+     *
+     * The transaction creation flow is manual, therefore
+     * the merchant supplied by the user is authoritative.
+     *
+     * NEVER call:
+     *
+     *   resolveTransactionMerchant()
+     *   resolveMerchant()
+     *   resolveMerchantWithAI()
+     *   normalizeMerchantName()
+     *
+     * here.
+     */
+    const merchant =
+        await prisma.merchant.upsert({
+            where: {
+                name: raw,
+            },
+
+            update: {},
+
+            create: {
+                name: raw,
+            },
+        });
+
+    return {
+        merchant,
+
+        merchantId:
+        merchant.id,
+
+        merchantRaw:
+        raw,
+
+        merchantNormalized:
+        merchant.name,
+
+        /*
+         * The category is supplied separately by
+         * createTransaction().
+         */
+        category: null,
+
+        categoryId: null,
+
+        /*
+         * If the user supplied a category, createTransaction()
+         * will mark it USER.
+         *
+         * Otherwise there is simply no category.
+         */
+        categoryAssignmentSource:
+            categoryId != null
+                ? CategoryAssignmentSource.USER
+                : CategoryAssignmentSource.NONE,
+
+        confidence: null,
+    };
+}
 
 export async function learnUserMerchantMapping({
                                                    tx,

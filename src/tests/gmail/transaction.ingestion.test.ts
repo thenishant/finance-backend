@@ -1,7 +1,10 @@
-import {describe, expect, it, vi,} from "vitest";
+import {beforeEach, describe, expect, it, vi,} from "vitest";
 
-import {FinancialAccountType, TransactionType,} from "@prisma/client";
+import {CategoryAssignmentSource, FinancialAccountType, TransactionSource, TransactionType,} from "@prisma/client";
 import {parseAxisEmail} from "../../modules/email/gmail/parsers/axis/axis.parser";
+import {ingestGmailEmail} from "../../modules/email/gmail/ingestion/transaction.ingestion";
+import {BankProvider} from "../../modules/email/gmail/detector/bank.detector";
+import {createISTDate} from "../../date";
 
 const mocks = vi.hoisted(() => ({
     transactionFindUnique: vi.fn(),
@@ -73,6 +76,124 @@ vi.mock(
 );
 
 describe("Axis email parser", () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it("assigns categoryId to Gmail imported non-transfer transactions", async () => {
+        const userId = "test-user-id";
+        const categoryId = "test-category-id";
+        const merchantId = "test-merchant-id";
+
+        mocks.detectBankProvider.mockReturnValue(
+            "AXIS",
+        );
+
+        mocks.parseEmail.mockReturnValue({
+            amount: 350,
+            type: TransactionType.EXPENSE,
+            merchant: "MADHU WINES",
+            accountLast4: "1256",
+            accountType:
+            FinancialAccountType.CREDIT_CARD,
+            transactionDate: new Date(
+                "2026-08-30T17:21:42+05:30",
+            ),
+            resolveMerchant: true,
+        });
+
+        mocks.resolveTransactionMerchant.mockResolvedValue({
+            merchant: {
+                id: merchantId,
+                name: "Madhu Wines",
+            },
+            merchantId,
+            merchantRaw: "MADHU WINES",
+            merchantNormalized: "Madhu Wines",
+            category: {
+                id: categoryId,
+                name: "Food & Dining",
+                type: TransactionType.EXPENSE,
+            },
+            categoryId,
+            categoryAssignmentSource:
+            CategoryAssignmentSource.AI,
+            confidence: 0.95,
+        });
+
+        mocks.transactionFindUnique
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(null);
+
+        mocks.financialAccountFindFirst.mockResolvedValue({
+            id: "account-id",
+        });
+
+        mocks.transaction.mockImplementation(
+            async callback =>
+                callback({
+                    transaction: {
+                        findUnique:
+                        mocks.transactionFindUnique,
+                        create: mocks.transactionCreate,
+                    },
+                    financialAccount: {
+                        findFirst:
+                        mocks.financialAccountFindFirst,
+                    },
+                }),
+        );
+
+        mocks.transactionCreate.mockResolvedValue({
+            id: "transaction-id",
+            userId,
+            type: TransactionType.EXPENSE,
+            amount: 350,
+            date: new Date(
+                "2026-08-30T17:21:42+05:30",
+            ),
+            year: 2026,
+            month: 8,
+            merchantId,
+            merchantRaw: "MADHU WINES",
+            merchantNormalized: "Madhu Wines",
+            categoryId,
+            categoryAssignmentSource:
+            CategoryAssignmentSource.AI,
+            aiCategoryConfidence: 0.95,
+            source: TransactionSource.GMAIL,
+            sourceAccountId: "account-id",
+        });
+
+        const result = await ingestGmailEmail({
+            userId,
+            gmailMessageId: "gmail-category-test-1",
+            sender: "alerts@axis.bank.in",
+            subject:
+                "INR 350.00 was debited from your A/c.",
+            body: `
+            Amount Debited: INR 350.00
+            Account Number: XX1256
+            Transaction Info: MADHU WINES
+        `,
+            receivedAt: new Date(
+                "2026-08-30T17:21:42+05:30",
+            ),
+        });
+
+        expect(result.status).toBe("created");
+
+        expect(mocks.transactionCreate).toHaveBeenCalledWith(
+            expect.objectContaining({
+                data: expect.objectContaining({
+                    categoryId,
+                    categoryAssignmentSource:
+                    CategoryAssignmentSource.AI,
+                    aiCategoryConfidence: 0.95,
+                }),
+            }),
+        );
+    });
 
     it("parses a standard bank account debit", () => {
 
@@ -436,5 +557,178 @@ describe("Axis email parser", () => {
             );
 
         expect(result).toBeNull();
+    });
+
+    it("allows Gmail transfers without a category", async () => {
+        mocks.detectBankProvider.mockReturnValue(
+            BankProvider.AXIS,
+        );
+
+        mocks.parseEmail.mockReturnValue({
+            amount: 3000,
+            type: TransactionType.TRANSFER,
+            merchant: "Credit Card Transfer",
+            resolveMerchant: true,
+            accountLast4: "0999",
+            accountType:
+            FinancialAccountType.BANK_ACCOUNT,
+            transactionDate: new Date(
+                "2026-08-30T21:54:13+05:30",
+            ),
+        });
+
+        mocks.resolveTransactionMerchant.mockResolvedValue({
+            merchant: {
+                id: "merchant-transfer",
+                name: "Credit Card Transfer",
+            },
+            merchantId: "merchant-transfer",
+            merchantRaw: "Credit Card Transfer",
+            merchantNormalized: "Credit Card Transfer",
+
+            category: null,
+            categoryId: null,
+
+            categoryAssignmentSource:
+            CategoryAssignmentSource.NONE,
+
+            confidence: 1,
+        });
+
+        mocks.transaction.mockImplementation(
+            async (callback: any) => {
+                return callback({
+                    transaction: {
+                        findUnique: mocks.transactionFindUnique,
+                        create: mocks.transactionCreate,
+                        update: vi.fn(),
+                    },
+                    financialAccount: {
+                        findFirst:
+                        mocks.financialAccountFindFirst,
+                    },
+                });
+            },
+        );
+
+        mocks.transactionFindUnique.mockResolvedValue(
+            null,
+        );
+
+        mocks.financialAccountFindFirst.mockResolvedValue({
+            id: "account-1",
+        });
+
+        mocks.transactionCreate.mockResolvedValue({
+            id: "transaction-1",
+            userId: "user-1",
+            type: TransactionType.TRANSFER,
+            amount: 3000,
+            year: 2026,
+            month: 8,
+            categoryId: null,
+        });
+
+        const result = await ingestGmailEmail({
+            userId: "user-1",
+            gmailMessageId: "gmail-transfer-test",
+            sender: "alerts@axis.bank.in",
+            subject: "Credit Card Transfer",
+            body: "Transfer",
+            receivedAt: new Date(
+                "2026-08-30T21:54:13+05:30",
+            ),
+        });
+
+        expect(result.status).toBe("created");
+
+        expect(
+            mocks.transactionCreate,
+        ).toHaveBeenCalled();
+    });
+
+    it("rejects Gmail non-transfer transactions when categorization fails", async () => {
+        mocks.detectBankProvider.mockReturnValue(
+            BankProvider.AXIS,
+        );
+
+        mocks.parseEmail.mockReturnValue({
+            amount: 350,
+            type: TransactionType.EXPENSE,
+            merchant: "MADHU WINES",
+            resolveMerchant: true,
+            accountLast4: "1256",
+            accountType:
+            FinancialAccountType.CREDIT_CARD,
+            transactionDate: new Date(
+                "2026-08-30T17:21:42+05:30",
+            ),
+        });
+
+        mocks.resolveTransactionMerchant.mockResolvedValue({
+            merchant: {
+                id: "merchant-1",
+                name: "Madhu Wines",
+            },
+            merchantId: "merchant-1",
+            merchantRaw: "MADHU WINES",
+            merchantNormalized: "Madhu Wines",
+
+            category: null,
+            categoryId: null,
+
+            categoryAssignmentSource:
+            CategoryAssignmentSource.NONE,
+
+            confidence: 0,
+        });
+
+        await expect(
+            ingestGmailEmail({
+                userId: "user-1",
+                gmailMessageId: "gmail-no-category",
+                sender: "alerts@axis.bank.in",
+                subject:
+                    "INR 350.00 was debited from your A/c.",
+                body: "Amount Debited: INR 350.00",
+                receivedAt: new Date(
+                    "2026-08-30T17:21:42+05:30",
+                ),
+            }),
+        ).rejects.toThrow(
+            "Gmail transaction could not be categorized",
+        );
+
+        expect(
+            mocks.transactionCreate,
+        ).not.toHaveBeenCalled();
+    });
+
+    it("parses Axis credit card date correctly", () => {
+        const result = parseAxisEmail(
+            "INR 350.00 spent on credit card no. XX1256",
+            `
+            30-08-2026
+            Dear Nishant Sharma,
+            Here's the summary of your Axis Bank Credit Card Transaction:
+            Transaction Amount:
+            INR 350.00
+            Merchant Name:
+            MADHU WINES
+            Axis Bank Credit Card No.
+            XX1256
+            Date & Time:
+            30-08-2026, 17:21:42 IST
+        `,
+        );
+
+        expect(result?.transactionDate).toEqual(
+            new Date("2026-08-30T17:21:42+05:30"),
+        );
+    });
+    it("creates IST date correctly", () => {
+        console.log(
+            createISTDate(2026, 7, 30, 17, 21, 42).toISOString(),
+        );
     });
 });
