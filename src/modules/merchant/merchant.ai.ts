@@ -5,9 +5,8 @@ import {getOpenAI} from "../../lib/openai";
 import {MerchantAIResponse, MerchantAIResult, MerchantCategoryOption,} from "./merchant.types";
 
 const MODEL =
-    process.env.OPENAI_MODEL ??
+    process.env.GROQ_MODEL ??
     "openai/gpt-oss-120b";
-
 /* -------------------------------------------------------------------------- */
 /*                         Merchant Resolution Prompt                         */
 /* -------------------------------------------------------------------------- */

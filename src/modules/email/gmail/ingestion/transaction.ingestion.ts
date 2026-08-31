@@ -1,11 +1,18 @@
 import {createHash} from "node:crypto";
+
 import {FinancialAccountType, Prisma, TransactionSource, TransactionType,} from "@prisma/client";
+
 import {prisma} from "../../../../database/prisma";
+
 import {postTransactionToLedger} from "../../../ledger/ledger.service";
 import {updateAnalytics} from "../../../transactions/transaction.service";
+
 import {BankProvider, detectBankProvider,} from "../detector/bank.detector";
+
 import {parseEmail} from "../parsers/parser.factory";
+
 import {resolveTransactionMerchant} from "../../../merchant/merchant.service";
+
 import {transactionInclude} from "../../../transactions/transaction.constants";
 
 export interface GmailEmailForIngestion {
@@ -17,29 +24,33 @@ export interface GmailEmailForIngestion {
     receivedAt?: Date | null;
 }
 
-
 const PARSER_VERSION = 2;
+
 /**
  * Gmail transaction ingestion.
  *
  * Rules:
  *
- * - Gmail non-transfer transactions MUST have a category.
- * - Gmail transfers intentionally have no category.
- * - If a non-transfer transaction cannot be categorized,
- *   it must NOT be persisted.
+ * - Unsupported emails are ignored.
+ * - Non-transaction emails are ignored.
+ * - Transfers intentionally have no category.
+ * - Merchant/category AI enrichment is best-effort.
+ * - AI failure must NEVER prevent a valid transaction from
+ *   being persisted.
+ * - A transaction may therefore be stored with categoryId = null.
  */
 export const ingestGmailEmail = async (
     email: GmailEmailForIngestion,
 ) => {
-
+    /*
+     * Detect bank provider.
+     */
     const provider =
         detectBankProvider(
             email.sender,
         );
 
-
-    /**
+    /*
      * Unsupported bank.
      */
     if (
@@ -51,8 +62,7 @@ export const ingestGmailEmail = async (
         };
     }
 
-
-    /**
+    /*
      * Parse email.
      */
     const parsed =
@@ -62,8 +72,7 @@ export const ingestGmailEmail = async (
             email.body,
         );
 
-
-    /**
+    /*
      * Email is not a transaction.
      */
     if (!parsed) {
@@ -72,54 +81,69 @@ export const ingestGmailEmail = async (
         };
     }
 
-
-    /**
+    /*
      * Resolve merchant and category.
      *
      * Transfers are intentionally not categorized.
      *
-     * All other Gmail transactions MUST receive
-     * a category.
+     * Category resolution is best-effort:
+     *
+     *   AI success
+     *       -> merchant + category
+     *
+     *   AI failure
+     *       -> merchant + null category
+     *
+     * The transaction must still be persisted.
      */
     const merchant =
         await resolveTransactionMerchant({
             userId: email.userId,
-
             merchantRaw:
             parsed.merchant,
-
             transactionType:
             parsed.type,
-
             shouldCategorize:
                 parsed.type !==
                 TransactionType.TRANSFER,
+
+            /*
+             * IMPORTANT:
+             *
+             * Do not require categorization for Gmail.
+             *
+             * A temporary AI/provider failure must not
+             * cause us to lose a financial transaction.
+             */
+            requireCategory: false,
         });
 
-
-    /**
-     * IMPORTANT:
+    /*
+     * Category is optional for Gmail ingestion.
      *
-     * Gmail non-transfer transactions must never
-     * be stored without a category.
-     *
-     * Transfers are the only exception.
+     * If AI categorization failed, the transaction will
+     * simply be persisted with categoryId = null.
      */
     if (
         parsed.type !==
         TransactionType.TRANSFER &&
         !merchant.categoryId
     ) {
-        throw new Error(
-            `Gmail transaction could not be categorized: ${
-                parsed.merchant ??
-                "Unknown merchant"
-            }`,
+        console.warn(
+            "[Gmail] Transaction imported without category",
+            {
+                merchant:
+                    merchant.merchantRaw ??
+                    parsed.merchant ??
+                    "Unknown merchant",
+
+                transactionType:
+                parsed.type,
+            },
         );
     }
 
-
-    /**
+    /*
      * Resolve transaction date.
      */
     const date =
@@ -127,8 +151,7 @@ export const ingestGmailEmail = async (
         email.receivedAt ??
         new Date();
 
-
-    /**
+    /*
      * Build deterministic fingerprint.
      */
     const fingerprint =
@@ -136,11 +159,8 @@ export const ingestGmailEmail = async (
             .update(
                 [
                     email.userId,
-
                     parsed.type,
-
                     parsed.amount,
-
                     date.toISOString(),
 
                     merchant.merchantId ??
@@ -154,13 +174,10 @@ export const ingestGmailEmail = async (
             )
             .digest("hex");
 
-
     try {
-
         return await prisma.$transaction(
             async tx => {
-
-                /**
+                /*
                  * Check whether this Gmail message
                  * was already imported.
                  */
@@ -170,14 +187,12 @@ export const ingestGmailEmail = async (
                             gmailMessageId:
                             email.gmailMessageId,
                         },
-
                         select: {
                             id: true,
                         },
                     });
 
-
-                /**
+                /*
                  * Find the financial account.
                  */
                 const sourceAccount =
@@ -195,29 +210,24 @@ export const ingestGmailEmail = async (
                                     FinancialAccountType.CREDIT_CARD,
 
                                 isActive: true,
-
                                 isArchived: false,
-
                                 deletedAt: null,
                             },
                         })
                         : null;
-
 
                 const amount =
                     new Prisma.Decimal(
                         parsed.amount,
                     );
 
-
-                /**
+                /*
                  * Existing Gmail transaction.
                  *
                  * Re-run parser and update it with
-                 * the latest parsed information.
+                 * the latest parsed/enriched information.
                  */
                 if (existingByMessage) {
-
                     const transaction =
                         await tx.transaction.update({
                             where: {
@@ -288,17 +298,14 @@ export const ingestGmailEmail = async (
                             transactionInclude,
                         });
 
-
                     return {
                         status: "updated" as const,
-
                         transactionId:
                         transaction.id,
                     };
                 }
 
-
-                /**
+                /*
                  * New transaction.
                  *
                  * Check fingerprint before creating.
@@ -314,26 +321,19 @@ export const ingestGmailEmail = async (
                         },
                     });
 
-
                 if (existingByFingerprint) {
-
                     return {
                         status: "duplicate" as const,
-
                         transactionId:
                         existingByFingerprint.id,
                     };
                 }
 
-
-                /**
+                /*
                  * Create transaction.
                  *
-                 * At this point we already know that:
-                 *
-                 * non-transfer → categoryId exists
-                 *
-                 * transfer → categoryId may be null
+                 * categoryId may be null when AI
+                 * categorization was unavailable.
                  */
                 const transaction =
                     await tx.transaction.create({
@@ -409,57 +409,41 @@ export const ingestGmailEmail = async (
                         transactionInclude,
                     });
 
-
-                /**
+                /*
                  * Post ledger entries when an account
                  * was successfully matched.
                  */
                 if (sourceAccount) {
-
                     await postTransactionToLedger(
                         tx,
-
                         email.userId,
-
                         transaction,
-
                         amount,
                     );
                 }
 
-
-                /**
+                /*
                  * Update monthly analytics.
                  */
                 await updateAnalytics(
                     tx,
-
                     email.userId,
-
                     transaction.year,
-
                     transaction.month,
-
                     transaction.type,
-
                     amount,
-
                     "increment",
                 );
 
-
                 return {
                     status: "created" as const,
-
                     transactionId:
                     transaction.id,
                 };
             },
         );
-
     } catch (error) {
-
-        /**
+        /*
          * Race-condition fallback.
          *
          * Another Gmail worker may have inserted
@@ -479,14 +463,12 @@ export const ingestGmailEmail = async (
     }
 };
 
-
 /**
  * Process a stored Gmail message.
  */
 export const processGmailMessage = async (
     gmailMessageId: string,
 ) => {
-
     const gmailMessage =
         await prisma.gmailMessage.findUnique({
             where: {
@@ -498,13 +480,11 @@ export const processGmailMessage = async (
             },
         });
 
-
     if (!gmailMessage) {
         return {
             status: "skipped" as const,
         };
     }
-
 
     const result =
         await ingestGmailEmail({
@@ -528,8 +508,7 @@ export const processGmailMessage = async (
                 gmailMessage.createdAt,
         });
 
-
-    /**
+    /*
      * Delete the Gmail staging record once
      * the message has been successfully processed
      * or identified as a duplicate.
@@ -538,8 +517,10 @@ export const processGmailMessage = async (
      * are retained.
      */
     if (
-        result.status !== "unsupported" &&
-        result.status !== "not-a-transaction"
+        result.status !==
+        "unsupported" &&
+        result.status !==
+        "not-a-transaction"
     ) {
         await prisma.gmailMessage.delete({
             where: {
@@ -547,7 +528,6 @@ export const processGmailMessage = async (
             },
         });
     }
-
 
     return result;
 };
