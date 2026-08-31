@@ -7,14 +7,15 @@
     "db:test:status": "dotenv -e .env.test -- prisma migrate status",
     "db:test:migrate": "dotenv -e .env.test -- prisma migrate deploy",
     "db:test:generate": "prisma generate",
-    "prod": "dotenv -e .env.prod -- nodemon",
+    "prod": "dotenv -e .env.prod -- node dist/server.js",
     "build": "tsc",
     "start": "node dist/server.js",
     "test": "dotenv -e .env.test -- vitest",
     "test:watch": "dotenv -e .env.test -- vitest",
     "postinstall": "prisma generate",
     "prisma-migrate": "npx prisma migrate dev",
-    "test:coverage": "dotenv -e .env.test -- vitest run --coverage"
+    "test:coverage": "dotenv -e .env.test -- vitest run --coverage",
+    "gmail:backfill": "dotenv -e .env.prod -- tsx src/scripts/backfill-gmail-transactions.ts"
   },
   "keywords": [],
   "author": "",

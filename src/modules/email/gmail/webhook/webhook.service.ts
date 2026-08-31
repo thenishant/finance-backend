@@ -18,39 +18,71 @@ export const handleGmailWebhook = async (
 ): Promise<void> => {
 
     if (!payload) {
-        console.warn("[Webhook] Empty payload");
+        console.warn(
+            "[Webhook] Empty payload",
+        );
+
         return;
     }
 
-    const encoded = payload.message?.data;
+    const encoded =
+        payload.message?.data;
 
     if (!encoded) {
-        console.warn("[Webhook] Missing Pub/Sub data");
+        console.warn(
+            "[Webhook] Missing Pub/Sub data",
+        );
+
         return;
     }
 
-    let notification: GmailNotification;
+    let notification: Partial<GmailNotification>;
 
     try {
         notification = JSON.parse(
-            Buffer.from(encoded, "base64").toString("utf8"),
+            Buffer.from(
+                encoded,
+                "base64",
+            ).toString("utf8"),
         );
     } catch (error) {
-        console.error("[Webhook] Invalid payload", error);
+        console.error(
+            "[Webhook] Invalid payload",
+            error,
+        );
+
         return;
     }
 
-    if (!notification.emailAddress) {
-        console.warn("[Webhook] Missing emailAddress");
+    if (
+        !notification.emailAddress ||
+        !notification.historyId
+    ) {
+        console.warn(
+            "[Webhook] Invalid Gmail notification",
+            notification,
+        );
+
         return;
     }
 
-    console.info("[Webhook] Notification", notification);
+    console.info(
+        "[Webhook] Gmail notification",
+        {
+            email:
+            notification.emailAddress,
+            notificationHistoryId:
+            notification.historyId,
+            pubSubMessageId:
+            payload.message?.messageId,
+        },
+    );
 
     const gmailAccount =
         await prisma.gmailAccount.findUnique({
             where: {
-                email: notification.emailAddress,
+                email:
+                notification.emailAddress,
             },
         });
 
@@ -59,10 +91,25 @@ export const handleGmailWebhook = async (
             "[Webhook] Gmail account not found",
             notification.emailAddress,
         );
+
         return;
     }
 
-    syncMailbox(gmailAccount.userId)
+    /*
+     * Gmail Pub/Sub notifications only tell us that the mailbox
+     * changed and provide the new historyId.
+     *
+     * We intentionally do not use the notification historyId as
+     * the application's checkpoint here.
+     *
+     * syncMailbox() reads the persisted Gmail account historyId,
+     * calls Gmail history.list(startHistoryId), processes the
+     * resulting messages, and only then advances the checkpoint.
+     *
+     * The sync itself is intentionally fire-and-forget because
+     * Pub/Sub should receive a fast 2xx acknowledgement.
+     */
+    void syncMailbox(gmailAccount.userId)
         .then(stats => {
             console.info(
                 "[Webhook] Sync completed",

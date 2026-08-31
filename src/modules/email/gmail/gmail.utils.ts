@@ -3,7 +3,7 @@ import {gmail_v1, google} from "googleapis";
 import {prisma} from "../../../database/prisma";
 
 const JWT_SECRET = process.env.JWT_SECRET!;
-export const GMAIL_QUERY = "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:30d";
+export const GMAIL_QUERY = "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:2d";
 export const GOOGLE_SCOPES: string[] = [
     "openid",
     "email",

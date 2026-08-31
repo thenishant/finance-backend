@@ -6,8 +6,9 @@ export const gmailWebhook = async (
     res: Response,
 ): Promise<void> => {
     res.sendStatus(200);
-
-    void handleGmailWebhook(req.body).catch(error => {
-        console.error(error);
-    });
+    try {
+        await handleGmailWebhook(req.body,);
+    } catch (error) {
+        console.error("[Webhook] Processing failed", error);
+    }
 };
