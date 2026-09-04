@@ -5,8 +5,6 @@ import {
     getGoogleUrl,
     getRecentImports,
     googleCallback,
-    processExistingEmails,
-    purgeStoredEmails,
     startWatch,
     syncGmail,
 } from "./gmail.controller";
@@ -24,8 +22,6 @@ router.use(authenticate);
 router.post("/connect", getGoogleUrl);
 router.get("/status", getGmailStatus);
 router.post("/sync", syncGmail);
-router.post("/process-existing", processExistingEmails);
-router.delete("/stored-messages", purgeStoredEmails);
 router.delete("/disconnect", disconnectGmail);
 router.post("/watch", startWatch);
 router.get("/recentImport", getRecentImports);

@@ -1,6 +1,5 @@
 import {google} from "googleapis";
 import {prisma} from "../../../database/prisma";
-import {processGmailMessage} from "./ingestion/transaction.ingestion";
 
 import {
     createGoogleClient,
@@ -313,82 +312,6 @@ export const getStatus = async (
         autoImportEnabled: true,
     };
 
-};
-
-export const processExistingEmails = async (
-    userId: string,
-) => {
-    const messages =
-        await prisma.gmailMessage.findMany({
-            where: {
-                gmailAccount: {
-                    userId,
-                },
-            },
-        });
-
-    let updated = 0;
-    let created = 0;
-    let duplicates = 0;
-    let failed = 0;
-
-    for (const message of messages) {
-        try {
-            const result =
-                await processGmailMessage(
-                    message.id,
-                );
-
-            switch (result.status) {
-                case "updated":
-                    updated++;
-                    break;
-
-                case "created":
-                    created++;
-                    break;
-
-                case "duplicate":
-                    duplicates++;
-                    break;
-
-                default:
-                    break;
-            }
-        } catch (error) {
-            failed++;
-
-            console.error(
-                "[Gmail] Failed to reprocess message",
-                {
-                    messageId: message.id,
-                    error,
-                },
-            );
-        }
-    }
-
-    return {
-        count: messages.length,
-        created,
-        updated,
-        duplicates,
-        failed,
-    };
-};
-
-export const purgeStoredEmails = async (userId: string) => {
-    const result = await prisma.gmailMessage.deleteMany({
-        where: {
-            gmailAccount: {
-                userId,
-            },
-        },
-    });
-
-    return {
-        deleted: result.count,
-    };
 };
 
 export const startWatch = async (

@@ -11,14 +11,15 @@ export const getGoogleUrl = async (
     next: NextFunction
 ) => {
     try {
-        const result = await gmailService.getGoogleUrl(getUserId(req));
+        const result = await gmailService.getGoogleUrl(
+            getUserId(req)
+        );
 
         return res.json({
             success: true,
             data: result,
         });
     } catch (error) {
-
         if (error instanceof GmailReconnectRequiredError) {
             return res.status(401).json({
                 success: false,
@@ -59,7 +60,9 @@ export const getGmailStatus = async (
     next: NextFunction
 ) => {
     try {
-        const result = await gmailService.getStatus(getUserId(req));
+        const result = await gmailService.getStatus(
+            getUserId(req)
+        );
 
         return res.json({
             success: true,
@@ -75,9 +78,7 @@ export const syncGmail = async (
     res: Response,
     next: NextFunction,
 ) => {
-
     try {
-
         const options = syncGmailSchema.parse(
             req.body ?? {},
         );
@@ -91,61 +92,17 @@ export const syncGmail = async (
             success: true,
             data: result,
         });
-
     } catch (error) {
-
         if (
             error instanceof GmailReconnectRequiredError
         ) {
-
             return res.status(401).json({
                 success: false,
                 code: "GMAIL_RECONNECT_REQUIRED",
                 message: "Please reconnect your Gmail account.",
             });
-
         }
 
-        next(error);
-
-    }
-
-};
-
-export const processExistingEmails = async (
-    req: Request,
-    res: Response,
-    next: NextFunction
-) => {
-    try {
-        const result = await gmailService.processExistingEmails(
-            getUserId(req)
-        );
-
-        return res.json({
-            success: true,
-            data: result,
-        });
-    } catch (error) {
-        next(error);
-    }
-};
-
-export const purgeStoredEmails = async (
-    req: Request,
-    res: Response,
-    next: NextFunction
-) => {
-    try {
-        const result = await gmailService.purgeStoredEmails(
-            getUserId(req)
-        );
-
-        return res.json({
-            success: true,
-            data: result,
-        });
-    } catch (error) {
         next(error);
     }
 };
@@ -155,9 +112,7 @@ export const startWatch = async (
     res: Response,
     next: NextFunction,
 ) => {
-
     try {
-
         await gmailService.startWatch(
             getUserId(req),
         );
@@ -165,11 +120,9 @@ export const startWatch = async (
         res.json({
             success: true,
         });
-
     } catch (error) {
         next(error);
     }
-
 };
 
 export const disconnectGmail = async (
@@ -177,9 +130,7 @@ export const disconnectGmail = async (
     res: Response,
     next: NextFunction,
 ) => {
-
     try {
-
         const result =
             await gmailService.disconnectGmail(
                 getUserId(req),
@@ -189,13 +140,9 @@ export const disconnectGmail = async (
             success: true,
             data: result,
         });
-
     } catch (error) {
-
         next(error);
-
     }
-
 };
 
 export const getRecentImports = async (
@@ -203,9 +150,7 @@ export const getRecentImports = async (
     res: Response,
     next: NextFunction,
 ) => {
-
     try {
-
         const result =
             await gmailService.getRecentImports(
                 getUserId(req),
@@ -215,11 +160,7 @@ export const getRecentImports = async (
             success: true,
             data: result,
         });
-
     } catch (error) {
-
         next(error);
-
     }
-
 };
