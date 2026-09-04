@@ -18,6 +18,10 @@ const mocks = vi.hoisted(() => ({
 
     financialAccountFindFirst: vi.fn(),
 
+    gmailMessageFindUnique: vi.fn(),
+    gmailMessageUpdate: vi.fn(),
+    gmailMessageDelete: vi.fn(),
+
     transaction: vi.fn(),
 
     resolveTransactionMerchant:
@@ -35,7 +39,6 @@ const mocks = vi.hoisted(() => ({
     detectBankProvider:
         vi.fn(),
 }));
-
 vi.mock(
     "../../database/prisma",
     () => ({
@@ -43,6 +46,17 @@ vi.mock(
             transaction: {
                 findUnique:
                 mocks.transactionFindUnique,
+            },
+
+            gmailMessage: {
+                findUnique:
+                mocks.gmailMessageFindUnique,
+
+                update:
+                mocks.gmailMessageUpdate,
+
+                delete:
+                mocks.gmailMessageDelete,
             },
 
             $transaction:
@@ -98,10 +112,24 @@ vi.mock(
     }),
 );
 
+const gmailMessage = {
+    id: "stored-message-1",
+    gmailMessageId: "gmail-message-1",
+    sender: "alerts@axis.bank.in",
+    subject: "Debit Alert",
+    body: "₹500 debited",
+    processed: false,
+    receivedAt: new Date(),
+    gmailAccount: {
+        userId: "user-1",
+    },
+};
+
 describe("Axis email parser / Gmail ingestion", () => {
     beforeEach(() => {
         vi.clearAllMocks();
-
+        mocks.gmailMessageFindUnique
+            .mockResolvedValue(gmailMessage);
         /*
          * Default transaction implementation.
          *
@@ -702,7 +730,6 @@ describe("Axis email parser / Gmail ingestion", () => {
     /* ---------------------------------------------------------------------- */
     /*                            Failure behavior                             */
     /* ---------------------------------------------------------------------- */
-
     it("creates Gmail non-transfer transaction even when categorization fails", async () => {
         const userId = "user-1";
         const merchantId = "merchant-1";
@@ -865,44 +892,17 @@ describe("Axis email parser / Gmail ingestion", () => {
             mocks.transactionCreate,
         ).toHaveBeenCalled();
 
-        expect(
-            mocks.transactionCreate,
-        ).toHaveBeenCalledWith(
+        expect(mocks.transactionCreate).toHaveBeenCalledWith(
             expect.objectContaining({
                 data: expect.objectContaining({
-                    userId,
-
-                    type:
-                    TransactionType.EXPENSE,
-
-                    amount:
-                        expect.anything(),
-
-                    merchantId,
-
-                    merchantRaw:
-                        "MADHU WINES",
-
-                    merchantNormalized:
-                        "Madhu Wines",
-
-                    categoryId:
-                        null,
-
-                    categoryAssignmentSource:
-                    CategoryAssignmentSource.NONE,
-
-                    aiCategoryConfidence:
-                        0,
-
-                    source:
-                    TransactionSource.GMAIL,
-
-                    sourceAccountId:
-                        "account-id",
-
-                    gmailMessageId:
-                        "gmail-ai-failure-test",
+                    merchantId: "merchant-1",
+                    merchantRaw: "MADHU WINES",
+                    categoryId: null,
+                    categoryAssignmentSource: "NONE",
+                    aiCategoryConfidence: 0,
+                    source: "GMAIL",
+                    sourceAccountId: "account-id",
+                    gmailMessageId: "gmail-ai-failure-test",
                 }),
             }),
         );

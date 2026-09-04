@@ -16,21 +16,236 @@ export interface GmailSyncStats {
     lastSyncAt: Date;
 }
 
-const activeSyncs = new Map<
-    string,
-    Promise<GmailSyncStats>
+type GmailAccount = Awaited<
+    ReturnType<typeof getConnectedGmailAccount>
 >;
+
+type IngestionResult = Awaited<
+    ReturnType<typeof ingestGmailEmail>
+>;
+
+const activeSyncs = new Map<string, Promise<GmailSyncStats>>();
+
+class GmailHistoryExpiredError extends Error {
+    constructor() {
+        super("Gmail history expired");
+        this.name = "GmailHistoryExpiredError";
+    }
+}
+
+const sleep = (ms: number): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+
+const getErrorStatus = (error: unknown): number | undefined => {
+    if (!error || typeof error !== "object") {
+        return undefined;
+    }
+
+    const candidate = error as {
+        code?: unknown;
+        response?: {
+            status?: unknown;
+        };
+    };
+
+    if (typeof candidate.code === "number") {
+        return candidate.code;
+    }
+
+    return typeof candidate.response?.status === "number"
+        ? candidate.response.status
+        : undefined;
+};
+
+const getErrorMessage = (error: unknown): string => {
+    if (!error || typeof error !== "object") {
+        return "";
+    }
+
+    const message = (error as { message?: unknown }).message;
+
+    return typeof message === "string" ? message.toLowerCase() : "";
+};
+
+const getErrorReason = (error: unknown): string => {
+    if (!error || typeof error !== "object") {
+        return "";
+    }
+
+    const response = (
+        error as {
+            response?: {
+                data?: {
+                    error?: unknown;
+                };
+            };
+        }
+    ).response;
+
+    return typeof response?.data?.error === "string"
+        ? response.data.error.toLowerCase()
+        : "";
+};
+
+const isAuthorizationError = (error: unknown): boolean => {
+    const status = getErrorStatus(error);
+    const message = getErrorMessage(error);
+    const reason = getErrorReason(error);
+
+    return (
+        status === 401 ||
+        status === 403 ||
+        message.includes("invalid_grant") ||
+        message.includes("invalid_token") ||
+        reason.includes("invalid_grant") ||
+        reason.includes("invalid_token") ||
+        reason.includes("unauthorized_client")
+    );
+};
+
+const retry = async <T>(
+    operation: () => Promise<T>,
+    description: string,
+    attempts = 3,
+): Promise<T> => {
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+            return await operation();
+        } catch (error) {
+            lastError = error;
+
+            const status = getErrorStatus(error);
+
+            if (
+                status === 401 ||
+                status === 403 ||
+                (status !== undefined && status >= 400 && status < 500)
+            ) {
+                throw error;
+            }
+
+            console.warn(
+                `[Retry ${attempt}/${attempts}] ${description}`,
+                {
+                    status,
+                    message: getErrorMessage(error),
+                },
+            );
+
+            if (attempt < attempts) {
+                await sleep(attempt * 500);
+            }
+        }
+    }
+
+    throw lastError;
+};
+
+const decodeBase64 = (input?: string | null): string => {
+    if (!input) {
+        return "";
+    }
+
+    return Buffer.from(
+        input.replace(/-/g, "+").replace(/_/g, "/"),
+        "base64",
+    ).toString("utf8");
+};
+
+const extractBody = (
+    payload?: gmail_v1.Schema$MessagePart | null,
+): string => {
+    if (!payload) {
+        return "";
+    }
+
+    if (payload.body?.data) {
+        return decodeBase64(payload.body.data);
+    }
+
+    const parts = payload.parts ?? [];
+
+    const plainTextPart = parts.find(
+        (part) => part.mimeType === "text/plain",
+    );
+
+    if (plainTextPart) {
+        const body = extractBody(plainTextPart);
+
+        if (body) {
+            return body;
+        }
+    }
+
+    for (const part of parts) {
+        const body = extractBody(part);
+
+        if (body) {
+            return body;
+        }
+    }
+
+    const htmlPart = parts.find(
+        (part) => part.mimeType === "text/html",
+    );
+
+    return htmlPart ? decodeBase64(htmlPart.body?.data) : "";
+};
+
+const getHeader = (
+    headers: gmail_v1.Schema$MessagePartHeader[] = [],
+    name: string,
+): string | null =>
+    headers.find(
+        (header) => header.name?.toLowerCase() === name.toLowerCase(),
+    )?.value ?? null;
+
+const saveCheckpoint = async (
+    gmailAccountId: string,
+    historyId: string,
+): Promise<Date> => {
+    const lastSyncAt = new Date();
+
+    await prisma.gmailAccount.update({
+        where: {id: gmailAccountId},
+        data: {
+            historyId,
+            lastSyncAt,
+        },
+    });
+
+    return lastSyncAt;
+};
+
+const handleAuthorizationError = async (
+    gmailAccount: GmailAccount,
+    error: unknown,
+): Promise<never> => {
+    if (!isAuthorizationError(error)) {
+        throw error;
+    }
+
+    console.error("[Google] Gmail authorization revoked", {
+        email: gmailAccount.email,
+    });
+
+    await prisma.gmailAccount.delete({
+        where: {id: gmailAccount.id},
+    });
+
+    throw new GmailReconnectRequiredError();
+};
 
 export const processMessage = async (
     gmail: gmail_v1.Gmail,
     userId: string,
     messageId: string,
-): Promise<
-    Awaited<ReturnType<typeof ingestGmailEmail>>
-> => {
+): Promise<IngestionResult> => {
     const detail = await retry(
-        async () =>
-            await gmail.users.messages.get({
+        () =>
+            gmail.users.messages.get({
                 userId: "me",
                 id: messageId,
             }),
@@ -45,13 +260,9 @@ export const processMessage = async (
         gmailMessageId: messageId,
         sender: getHeader(headers, "from"),
         subject: getHeader(headers, "subject"),
-        body: cleanEmailBody(
-            extractBody(payload),
-        ),
+        body: cleanEmailBody(extractBody(payload)),
         receivedAt: detail.data.internalDate
-            ? new Date(
-                Number(detail.data.internalDate),
-            )
+            ? new Date(Number(detail.data.internalDate))
             : null,
     });
 };
@@ -59,9 +270,7 @@ export const processMessage = async (
 const processMessages = async (
     gmail: gmail_v1.Gmail,
     userId: string,
-    messages: {
-        id: string;
-    }[],
+    messages: { id: string }[],
     label: "Initial" | "Incremental",
 ) => {
     const stats = {
@@ -70,21 +279,17 @@ const processMessages = async (
         skipped: 0,
     };
 
-    for (
-        const [index, message]
-        of messages.entries()
-        ) {
+    for (const [index, message] of messages.entries()) {
         console.info(
             `[${label} ${index + 1}/${messages.length}] ${message.id}`,
         );
 
         try {
-            const result =
-                await processMessage(
-                    gmail,
-                    userId,
-                    message.id,
-                );
+            const result = await processMessage(
+                gmail,
+                userId,
+                message.id,
+            );
 
             switch (result.status) {
                 case "created":
@@ -97,7 +302,6 @@ const processMessages = async (
 
                 default:
                     stats.skipped++;
-                    break;
             }
         } catch (error) {
             if (isAuthorizationError(error)) {
@@ -109,624 +313,257 @@ const processMessages = async (
                 error,
             );
 
-            stats.skipped++;
+            // Do not continue. Incremental sync must not advance
+            // the checkpoint past a message that failed to ingest.
+            throw error;
         }
     }
 
     return stats;
 };
 
-const decodeBase64 = (
-    input?: string | null,
-): string => {
-    if (!input) {
-        return "";
-    }
+export const performInitialSync = async (
+    gmail: gmail_v1.Gmail,
+    gmailAccount: GmailAccount,
+    userId: string,
+    options: SyncGmailDTO,
+): Promise<GmailSyncStats> => {
+    const response = await retry(
+        () =>
+            gmail.users.messages
+                .list({
+                    userId: "me",
+                    q: GMAIL_QUERY,
+                    maxResults: options.maxResults ?? 50,
+                    pageToken: options.pageToken,
+                })
+                .then((result) => result.data),
+        "Initial Gmail sync",
+    );
 
-    return Buffer.from(
-        input
-            .replace(/-/g, "+")
-            .replace(/_/g, "/"),
-        "base64",
-    ).toString("utf8");
-};
+    const messages = (response.messages ?? []).filter(
+        (message): message is { id: string } =>
+            Boolean(message.id),
+    );
 
-const extractBody = (
-    payload?:
-        | gmail_v1.Schema$MessagePart
-        | null,
-): string => {
-    if (!payload) {
-        return "";
-    }
+    const stats = await processMessages(
+        gmail,
+        userId,
+        messages,
+        "Initial",
+    );
 
-    if (payload.body?.data) {
-        return decodeBase64(
-            payload.body.data,
+    const profile = await retry(
+        () =>
+            gmail.users
+                .getProfile({userId: "me"})
+                .then((result) => result.data),
+        "Load Gmail profile",
+    );
+
+    if (!profile.historyId) {
+        throw new Error(
+            "Unable to determine Gmail historyId.",
         );
     }
 
-    const parts = payload.parts ?? [];
-
-    for (const part of parts) {
-        if (
-            part.mimeType ===
-            "text/plain"
-        ) {
-            return decodeBase64(
-                part.body?.data,
-            );
-        }
-    }
-
-    for (const part of parts) {
-        const body =
-            extractBody(part);
-
-        if (body) {
-            return body;
-        }
-    }
-
-    for (const part of parts) {
-        if (
-            part.mimeType ===
-            "text/html"
-        ) {
-            return decodeBase64(
-                part.body?.data,
-            );
-        }
-    }
-
-    return "";
-};
-
-const getHeader = (
-    headers:
-    gmail_v1.Schema$MessagePartHeader[] = [],
-    name: string,
-): string | null =>
-    headers.find(
-        h =>
-            h.name?.toLowerCase() ===
-            name.toLowerCase(),
-    )?.value ?? null;
-
-const saveCheckpoint = async (
-    gmailAccountId: string,
-    historyId: string,
-): Promise<Date> => {
-    const lastSyncAt =
-        new Date();
-
-    await prisma.gmailAccount.update({
-        where: {
-            id: gmailAccountId,
-        },
-        data: {
-            historyId,
-            lastSyncAt,
-        },
-    });
-
-    return lastSyncAt;
-};
-
-class GmailHistoryExpiredError
-    extends Error {
-    constructor() {
-        super("Gmail history expired");
-        this.name =
-            "GmailHistoryExpiredError";
-    }
-}
-
-const isAuthorizationError = (
-    error: any,
-): boolean => {
-    const status =
-        error?.code ??
-        error?.response?.status;
-
-    const message =
-        String(
-            error?.message ?? "",
-        ).toLowerCase();
-
-    const reason =
-        String(
-            error?.response?.data?.error ??
-            "",
-        ).toLowerCase();
-
-    return (
-        status === 401 ||
-        status === 403 ||
-        message.includes(
-            "invalid_grant",
-        ) ||
-        message.includes(
-            "invalid_token",
-        ) ||
-        reason.includes(
-            "invalid_grant",
-        ) ||
-        reason.includes(
-            "invalid_token",
-        ) ||
-        reason.includes(
-            "unauthorized_client",
-        )
-    );
-};
-
-const handleAuthorizationError =
-    async (
-        gmailAccount: GmailAccount,
-        error: unknown,
-    ): Promise<never> => {
-        if (
-            !isAuthorizationError(error)
-        ) {
-            throw error;
-        }
-
-        console.error(
-            "[Google] Gmail authorization revoked",
-            {
-                email:
-                gmailAccount.email,
-            },
-        );
-
-        await prisma.gmailAccount.delete({
-            where: {
-                id: gmailAccount.id,
-            },
-        });
-
-        throw new GmailReconnectRequiredError();
-    };
-
-const sleep = (
-    ms: number,
-): Promise<void> =>
-    new Promise(resolve =>
-        setTimeout(resolve, ms),
+    const lastSyncAt = await saveCheckpoint(
+        gmailAccount.id,
+        profile.historyId,
     );
 
-const retry = async <T>(
-    operation: () => Promise<T>,
-    description: string,
-    attempts = 3,
-): Promise<T> => {
-    let lastError: unknown;
-
-    for (
-        let attempt = 1;
-        attempt <= attempts;
-        attempt++
-    ) {
-        try {
-            return await operation();
-        } catch (error: any) {
-            lastError = error;
-
-            const status =
-                error?.code ??
-                error?.response?.status;
-
-            if (
-                status === 401 ||
-                status === 403
-            ) {
-                throw error;
-            }
-
-            if (
-                status &&
-                status >= 400 &&
-                status < 500
-            ) {
-                throw error;
-            }
-
-            console.warn(
-                `[Retry ${attempt}/${attempts}] ${description}`,
-                {
-                    status,
-                    message:
-                    error?.message,
-                },
-            );
-
-            if (
-                attempt < attempts
-            ) {
-                await sleep(
-                    attempt * 500,
-                );
-            }
-        }
-    }
-
-    throw lastError;
+    return {
+        fetched: messages.length,
+        transactionsCreated: stats.transactionsCreated,
+        duplicates: stats.duplicates,
+        skipped: stats.skipped,
+        nextPageToken: response.nextPageToken ?? null,
+        lastSyncAt,
+    };
 };
 
-type GmailAccount =
-    Awaited<
-        ReturnType<
-            typeof getConnectedGmailAccount
-        >
-    >;
+export const performIncrementalSync = async (
+    gmail: gmail_v1.Gmail,
+    gmailAccount: GmailAccount,
+    userId: string,
+): Promise<GmailSyncStats> => {
+    const startHistoryId = gmailAccount.historyId;
 
-export const performInitialSync =
-    async (
-        gmail: gmail_v1.Gmail,
-        gmailAccount: GmailAccount,
-        userId: string,
-        options: SyncGmailDTO,
-    ): Promise<GmailSyncStats> => {
-        const response =
-            await retry<
-                gmail_v1.Schema$ListMessagesResponse
-            >(
-                async () =>
-                    (
-                        await gmail.users.messages.list(
-                            {
-                                userId: "me",
-                                q: GMAIL_QUERY,
-                                maxResults:
-                                    options.maxResults ??
-                                    50,
-                                pageToken:
-                                options.pageToken,
-                            },
-                        )
-                    ).data,
-                "Initial Gmail sync",
+    if (!startHistoryId) {
+        throw new GmailHistoryExpiredError();
+    }
+
+    const messageIds = new Set<string>();
+    let latestHistoryId = startHistoryId;
+    let pageToken: string | undefined;
+
+    try {
+        do {
+            const response = await retry(
+                () =>
+                    gmail.users.history
+                        .list({
+                            userId: "me",
+                            startHistoryId,
+                            pageToken,
+                        })
+                        .then((result) => result.data),
+                "Load Gmail history",
             );
 
-        const messages =
-            (
-                response.messages ??
-                []
-            ).filter(
-                (
-                    message,
-                ): message is
-                    gmail_v1.Schema$Message & {
-                    id: string;
-                } =>
-                    Boolean(message.id),
-            );
+            console.info("[Gmail] History page", {
+                startHistoryId,
+                responseHistoryId: response.historyId,
+                historyRecords: response.history?.length ?? 0,
+                nextPageToken: response.nextPageToken ?? null,
+            });
 
-        const stats =
-            await processMessages(
-                gmail,
-                userId,
-                messages,
-                "Initial",
-            );
+            latestHistoryId =
+                response.historyId ?? latestHistoryId;
 
-        const profile =
-            await retry<
-                gmail_v1.Schema$Profile
-            >(
-                async () =>
-                    (
-                        await gmail.users.getProfile(
-                            {
-                                userId: "me",
-                            },
-                        )
-                    ).data,
-                "Load Gmail profile",
-            );
+            for (const history of response.history ?? []) {
+                for (const added of history.messagesAdded ?? []) {
+                    const messageId = added.message?.id;
 
-        if (!profile.historyId) {
-            throw new Error(
-                "Unable to determine Gmail historyId.",
-            );
-        }
+                    if (messageId) {
+                        messageIds.add(messageId);
+                    }
+                }
+            }
 
-        const lastSyncAt =
-            await saveCheckpoint(
-                gmailAccount.id,
-                profile.historyId,
-            );
-
-        return {
-            fetched: messages.length,
-            transactionsCreated:
-            stats.transactionsCreated,
-            duplicates:
-            stats.duplicates,
-            skipped:
-            stats.skipped,
-            nextPageToken:
-                response.nextPageToken ??
-                null,
-            lastSyncAt,
-        };
-    };
-
-export const performIncrementalSync =
-    async (
-        gmail: gmail_v1.Gmail,
-        gmailAccount: GmailAccount,
-        userId: string,
-    ): Promise<GmailSyncStats> => {
-        if (!gmailAccount.historyId) {
+            pageToken = response.nextPageToken || undefined;
+        } while (pageToken);
+    } catch (error) {
+        if (getErrorStatus(error) === 404) {
             throw new GmailHistoryExpiredError();
         }
 
-        const messageIds =
-            new Set<string>();
+        throw error;
+    }
 
-        let latestHistoryId =
-            gmailAccount.historyId;
+    console.info("[Gmail] Incremental sync", {
+        previousHistoryId: startHistoryId,
+        latestHistoryId,
+        newMessages: messageIds.size,
+    });
 
-        let pageToken:
-            | string
-            | undefined;
+    const stats = await processMessages(
+        gmail,
+        userId,
+        [...messageIds].map((id) => ({id})),
+        "Incremental",
+    );
 
-        try {
-            do {
-                const response =
-                    await retry<
-                        gmail_v1.Schema$ListHistoryResponse
-                    >(
-                        async () =>
-                            (
-                                await gmail.users.history.list(
-                                    {
-                                        userId: "me",
-                                        startHistoryId:
-                                            gmailAccount.historyId!,
-                                        pageToken,
-                                    },
-                                )
-                            ).data,
-                        "Load Gmail history",
-                    );
+    const lastSyncAt = await saveCheckpoint(
+        gmailAccount.id,
+        latestHistoryId,
+    );
 
-                console.info(
-                    "[Gmail] History page",
-                    {
-                        startHistoryId:
-                        gmailAccount.historyId,
-                        responseHistoryId:
-                        response.historyId,
-                        historyRecords:
-                            response.history
-                                ?.length ?? 0,
-                        nextPageToken:
-                            response.nextPageToken ??
-                            null,
-                    },
-                );
-
-                latestHistoryId =
-                    response.historyId ??
-                    latestHistoryId;
-
-                for (
-                    const history
-                    of response.history ??
-                []
-                    ) {
-                    for (
-                        const added
-                        of history.messagesAdded ??
-                    []
-                        ) {
-                        if (
-                            added.message?.id
-                        ) {
-                            messageIds.add(
-                                added.message.id,
-                            );
-                        }
-                    }
-                }
-
-                pageToken =
-                    response.nextPageToken ||
-                    undefined;
-            } while (pageToken);
-        } catch (error: any) {
-            if (
-                error?.code === 404 ||
-                error?.response?.status ===
-                404
-            ) {
-                throw new GmailHistoryExpiredError();
-            }
-
-            throw error;
-        }
-
-        console.info(
-            "[Gmail] Incremental sync",
-            {
-                previousHistoryId:
-                gmailAccount.historyId,
-                latestHistoryId,
-                newMessages:
-                messageIds.size,
-            },
-        );
-
-        const stats =
-            await processMessages(
-                gmail,
-                userId,
-                [...messageIds].map(
-                    id => ({id}),
-                ),
-                "Incremental",
-            );
-
-        const lastSyncAt =
-            await saveCheckpoint(
-                gmailAccount.id,
-                latestHistoryId,
-            );
-
-        return {
-            fetched: messageIds.size,
-            transactionsCreated:
-            stats.transactionsCreated,
-            duplicates:
-            stats.duplicates,
-            skipped:
-            stats.skipped,
-            nextPageToken: null,
-            lastSyncAt,
-        };
+    return {
+        fetched: messageIds.size,
+        transactionsCreated: stats.transactionsCreated,
+        duplicates: stats.duplicates,
+        skipped: stats.skipped,
+        nextPageToken: null,
+        lastSyncAt,
     };
+};
 
 export const syncMailbox = async (
     userId: string,
     options: SyncGmailDTO = {},
 ): Promise<GmailSyncStats> => {
+    const existingSync = activeSyncs.get(userId);
 
-    const existing =
-        activeSyncs.get(userId);
-
-    if (existing) {
+    if (existingSync) {
         console.info(
             "[Gmail] Sync already running; waiting for existing sync",
             {userId},
         );
 
-        return existing;
+        return existingSync;
     }
 
-    const syncPromise =
-        executeSyncMailbox(
-            userId,
-            options,
-        );
+    const syncPromise = executeSyncMailbox(userId, options);
 
-    activeSyncs.set(
-        userId,
-        syncPromise,
-    );
+    activeSyncs.set(userId, syncPromise);
 
     try {
         return await syncPromise;
     } finally {
-        if (
-            activeSyncs.get(userId) ===
-            syncPromise
-        ) {
+        if (activeSyncs.get(userId) === syncPromise) {
             activeSyncs.delete(userId);
         }
     }
 };
 
-const executeSyncMailbox =
-    async (
-        userId: string,
-        options: SyncGmailDTO,
-    ): Promise<GmailSyncStats> => {
-        const startedAt =
-            Date.now();
+const executeSyncMailbox = async (
+    userId: string,
+    options: SyncGmailDTO,
+): Promise<GmailSyncStats> => {
+    const startedAt = Date.now();
+    let gmailAccount: GmailAccount | null = null;
 
-        let gmailAccount:
-            | GmailAccount
-            | null = null;
+    try {
+        gmailAccount = await getConnectedGmailAccount(userId);
+
+        const gmail = createGmailClient(
+            gmailAccount.refreshToken,
+        );
+
+        let result: GmailSyncStats;
 
         try {
-            gmailAccount =
-                await getConnectedGmailAccount(
+            result = gmailAccount.historyId
+                ? await performIncrementalSync(
+                    gmail,
+                    gmailAccount,
                     userId,
-                );
-
-            const gmail =
-                createGmailClient(
-                    gmailAccount.refreshToken,
-                );
-
-            let result:
-                GmailSyncStats;
-
-            try {
-                result =
-                    gmailAccount.historyId
-                        ? await performIncrementalSync(
-                            gmail,
-                            gmailAccount,
-                            userId,
-                        )
-                        : await performInitialSync(
-                            gmail,
-                            gmailAccount,
-                            userId,
-                            options,
-                        );
-            } catch (error) {
-                if (
-                    error instanceof
-                    GmailHistoryExpiredError
-                ) {
-                    console.warn(
-                        "[Gmail] History expired; performing initial sync",
-                    );
-
-                    result =
-                        await performInitialSync(
-                            gmail,
-                            gmailAccount,
-                            userId,
-                            options,
-                        );
-                } else {
-                    await handleAuthorizationError(
-                        gmailAccount,
-                        error,
-                    );
-
-                    throw error;
-                }
-            }
-
-            console.info(
-                "[Gmail] Sync completed",
-                {
+                )
+                : await performInitialSync(
+                    gmail,
+                    gmailAccount,
                     userId,
-                    email:
-                    gmailAccount.email,
-                    durationMs:
-                        Date.now() -
-                        startedAt,
-                    fetched:
-                    result.fetched,
-                    created:
-                    result.transactionsCreated,
-                    duplicates:
-                    result.duplicates,
-                    skipped:
-                    result.skipped,
-                },
-            );
-
-            return result;
+                    options,
+                );
         } catch (error) {
-            console.error(
-                "[Gmail] Sync failed",
-                {
-                    userId,
-                    email:
-                    gmailAccount?.email,
-                    error,
-                },
-            );
+            if (error instanceof GmailHistoryExpiredError) {
+                console.warn(
+                    "[Gmail] History expired; performing initial sync",
+                );
 
-            throw error;
+                result = await performInitialSync(
+                    gmail,
+                    gmailAccount,
+                    userId,
+                    options,
+                );
+            } else {
+                await handleAuthorizationError(
+                    gmailAccount,
+                    error,
+                );
+            }
         }
-    };
+
+        console.info("[Gmail] Sync completed", {
+            userId,
+            email: gmailAccount.email,
+            durationMs: Date.now() - startedAt,
+            fetched: result!.fetched,
+            created: result!.transactionsCreated,
+            duplicates: result!.duplicates,
+            skipped: result!.skipped,
+        });
+
+        return result!;
+    } catch (error) {
+        console.error("[Gmail] Sync failed", {
+            userId,
+            email: gmailAccount?.email,
+            error,
+        });
+
+        throw error;
+    }
+};

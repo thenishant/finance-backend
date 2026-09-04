@@ -6,6 +6,7 @@ import {
     processMessage,
     syncMailbox,
 } from "../../modules/email/gmail/gmail.sync";
+import {GmailReconnectRequiredError} from "../../error/GmailReconnectRequiredError";
 
 const mocks = vi.hoisted(() => ({
     ingestGmailEmail: vi.fn(),
@@ -56,6 +57,44 @@ vi.mock(
         mocks.getConnectedGmailAccount,
     }),
 );
+
+const createGmailAuthError = () => {
+    const error = new Error("Invalid grant") as Error & {
+        response?: {
+            status?: number;
+        };
+        code?: number;
+    };
+
+    error.code = 401;
+
+    return error;
+};
+
+const createGmailMessage = ({
+                                id,
+                            }: {
+    id: string;
+}) => ({
+    id,
+    internalDate: String(Date.now()),
+    payload: {
+        headers: [
+            {
+                name: "From",
+                value: "alerts@axis.bank.in",
+            },
+            {
+                name: "Subject",
+                value: "Transaction alert",
+            },
+        ],
+        body: {
+            data: "",
+        },
+        parts: [],
+    },
+});
 
 describe("gmail.sync", () => {
 
@@ -594,6 +633,80 @@ describe("gmail.sync", () => {
     // ---------------------------------------------------------------------
 
     describe("performIncrementalSync", () => {
+        it("stops processing when a message fails and does not advance the checkpoint", async () => {
+            mocks.ingestGmailEmail
+                .mockRejectedValueOnce(
+                    new Error("bad message"),
+                );
+
+            const gmail = {
+                users: {
+                    history: {
+                        list: vi.fn()
+                            .mockResolvedValue({
+                                data: {
+                                    historyId:
+                                        "history-20",
+                                    history: [
+                                        {
+                                            messagesAdded: [
+                                                {
+                                                    message: {
+                                                        id: "message-1",
+                                                    },
+                                                },
+                                                {
+                                                    message: {
+                                                        id: "message-2",
+                                                    },
+                                                },
+                                            ],
+                                        },
+                                    ],
+                                },
+                            }),
+                    },
+
+                    messages: {
+                        get: vi.fn()
+                            .mockResolvedValue({
+                                data: {
+                                    payload: {
+                                        headers: [],
+                                        body: {
+                                            data: Buffer
+                                                .from("test")
+                                                .toString("base64"),
+                                        },
+                                    },
+                                },
+                            }),
+                    },
+                },
+            } as any;
+
+            await expect(
+                performIncrementalSync(
+                    gmail,
+                    {
+                        id: "account-1",
+                        userId: "user-1",
+                        email: "user@gmail.com",
+                        refreshToken: "refresh",
+                        historyId: "history-10",
+                    } as any,
+                    "user-1",
+                ),
+            ).rejects.toThrow("bad message");
+
+            expect(
+                mocks.ingestGmailEmail,
+            ).toHaveBeenCalledTimes(1);
+
+            expect(
+                mocks.gmailAccountUpdate,
+            ).not.toHaveBeenCalled();
+        });
 
         it("processes newly added messages", async () => {
 
@@ -1151,101 +1264,6 @@ describe("gmail.sync", () => {
             ).toBe(1);
         });
 
-        it("continues processing when one message fails", async () => {
-
-            mocks.ingestGmailEmail
-                .mockRejectedValueOnce(
-                    new Error("bad message"),
-                )
-                .mockResolvedValueOnce({
-                    status:
-                        "created",
-                    transactionId:
-                        "transaction-2",
-                });
-
-            const gmail = {
-                users: {
-                    history: {
-                        list: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    historyId:
-                                        "history-20",
-
-                                    history: [
-                                        {
-                                            messagesAdded: [
-                                                {
-                                                    message: {
-                                                        id:
-                                                            "message-1",
-                                                    },
-                                                },
-                                                {
-                                                    message: {
-                                                        id:
-                                                            "message-2",
-                                                    },
-                                                },
-                                            ],
-                                        },
-                                    ],
-                                },
-                            }),
-                    },
-
-                    messages: {
-                        get: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    payload: {
-                                        headers: [],
-                                        body: {
-                                            data:
-                                                Buffer
-                                                    .from(
-                                                        "test",
-                                                    )
-                                                    .toString(
-                                                        "base64",
-                                                    ),
-                                        },
-                                    },
-                                },
-                            }),
-                    },
-                },
-            } as any;
-
-            const result =
-                await performIncrementalSync(
-                    gmail,
-                    {
-                        id: "account-1",
-                        userId: "user-1",
-                        email: "user@gmail.com",
-                        refreshToken:
-                            "refresh",
-                        historyId:
-                            "history-10",
-                    } as any,
-                    "user-1",
-                );
-
-            expect(
-                result.fetched,
-            ).toBe(2);
-
-            expect(
-                result.transactionsCreated,
-            ).toBe(1);
-
-            expect(
-                result.skipped,
-            ).toBe(1);
-        });
-
         it("rejects when historyId is missing", async () => {
 
             await expect(
@@ -1305,9 +1323,7 @@ describe("gmail.sync", () => {
     // ---------------------------------------------------------------------
 
     describe("syncMailbox", () => {
-
         it("performs an initial sync when historyId is missing", async () => {
-
             mocks.createGmailClient
                 .mockReturnValue({
                     users: {
@@ -1622,7 +1638,305 @@ describe("gmail.sync", () => {
                 "my-refresh-token",
             );
         });
+        it("deletes the Gmail account and requires reconnect when authorization is revoked", async () => {
+            mocks.getConnectedGmailAccount
+                .mockResolvedValue({
+                    id: "gmail-account-1",
+                    userId: "user-1",
+                    email: "user@gmail.com",
+                    refreshToken: "refresh-token",
+                    historyId: "history-123",
+                });
 
+            const historyList = vi.fn()
+                .mockRejectedValue(
+                    createGmailAuthError(),
+                );
+
+            mocks.createGmailClient
+                .mockReturnValue({
+                    users: {
+                        history: {
+                            list: historyList,
+                        },
+
+                        messages: {
+                            get: vi.fn(),
+                        },
+                    },
+                });
+
+            await expect(
+                syncMailbox("user-1"),
+            ).rejects.toThrow(
+                GmailReconnectRequiredError,
+            );
+
+            expect(
+                mocks.gmailAccountDelete,
+            ).toHaveBeenCalledWith({
+                where: {
+                    id: "gmail-account-1",
+                },
+            });
+        });
     });
 
+    describe("Gmail reconnect flow", () => {
+        it("imports missed transactions after Gmail is reconnected", async () => {
+            mocks.getConnectedGmailAccount
+                .mockResolvedValue({
+                    id: "gmail-account-2",
+                    userId: "user-1",
+                    email: "user@gmail.com",
+                    refreshToken: "new-refresh-token",
+                    historyId: null,
+                });
+
+            const messagesList = vi.fn()
+                .mockResolvedValue({
+                    data: {
+                        messages: [
+                            {id: "missed-transaction-1"},
+                            {id: "missed-transaction-2"},
+                        ],
+                    },
+                });
+
+            const messagesGet = vi.fn()
+                .mockImplementation(
+                    async ({
+                               id,
+                           }: {
+                        id: string;
+                    }) => ({
+                        data: createGmailMessage({id}),
+                    }),
+                );
+
+            const getProfile = vi.fn()
+                .mockResolvedValue({
+                    data: {
+                        historyId: "history-after-reconnect",
+                    },
+                });
+
+            mocks.createGmailClient
+                .mockReturnValue({
+                    users: {
+                        messages: {
+                            list: messagesList,
+                            get: messagesGet,
+                        },
+
+                        getProfile,
+                    },
+                });
+
+            mocks.ingestGmailEmail
+                .mockResolvedValueOnce({
+                    status: "created",
+                    transactionId: "transaction-1",
+                })
+                .mockResolvedValueOnce({
+                    status: "created",
+                    transactionId: "transaction-2",
+                });
+
+            const result = await syncMailbox(
+                "user-1",
+            );
+
+            expect(messagesList)
+                .toHaveBeenCalledWith({
+                    userId: "me",
+                    q:
+                        "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:30d",
+                    maxResults: 50,
+                    pageToken: undefined,
+                });
+
+            expect(messagesGet)
+                .toHaveBeenCalledTimes(2);
+
+            expect(
+                mocks.ingestGmailEmail,
+            ).toHaveBeenCalledTimes(2);
+
+            expect(
+                mocks.ingestGmailEmail,
+            ).toHaveBeenNthCalledWith(
+                1,
+                expect.objectContaining({
+                    userId: "user-1",
+                    gmailMessageId:
+                        "missed-transaction-1",
+                }),
+            );
+
+            expect(
+                mocks.ingestGmailEmail,
+            ).toHaveBeenNthCalledWith(
+                2,
+                expect.objectContaining({
+                    userId: "user-1",
+                    gmailMessageId:
+                        "missed-transaction-2",
+                }),
+            );
+
+            expect(result).toEqual(
+                expect.objectContaining({
+                    fetched: 2,
+                    transactionsCreated: 2,
+                    duplicates: 0,
+                    skipped: 0,
+                }),
+            );
+
+            expect(
+                mocks.gmailAccountUpdate,
+            ).toHaveBeenCalledWith({
+                where: {
+                    id: "gmail-account-2",
+                },
+                data: expect.objectContaining({
+                    historyId:
+                        "history-after-reconnect",
+                    lastSyncAt:
+                        expect.any(Date),
+                }),
+            });
+        });
+        it("imports missed transactions after Gmail is reconnected", async () => {
+            mocks.getConnectedGmailAccount
+                .mockResolvedValue({
+                    id: "gmail-account-2",
+                    userId: "user-1",
+                    email: "user@gmail.com",
+                    refreshToken: "new-refresh-token",
+                    historyId: null,
+                });
+
+            const messagesList = vi.fn()
+                .mockResolvedValue({
+                    data: {
+                        messages: [
+                            {
+                                id: "missed-transaction-1",
+                            },
+                            {
+                                id: "missed-transaction-2",
+                            },
+                        ],
+                    },
+                });
+
+            const messagesGet = vi.fn()
+                .mockImplementation(
+                    async ({
+                               id,
+                           }: {
+                        id: string;
+                    }) => ({
+                        data: createGmailMessage({id}),
+                    }),
+                );
+
+            const getProfile = vi.fn()
+                .mockResolvedValue({
+                    data: {
+                        historyId:
+                            "history-after-reconnect",
+                    },
+                });
+
+            mocks.createGmailClient
+                .mockReturnValue({
+                    users: {
+                        messages: {
+                            list: messagesList,
+                            get: messagesGet,
+                        },
+
+                        getProfile,
+                    },
+                });
+
+            mocks.ingestGmailEmail
+                .mockResolvedValueOnce({
+                    status: "created",
+                    transactionId: "transaction-1",
+                })
+                .mockResolvedValueOnce({
+                    status: "created",
+                    transactionId: "transaction-2",
+                });
+
+            const result = await syncMailbox(
+                "user-1",
+            );
+
+            expect(messagesList)
+                .toHaveBeenCalledWith({
+                    userId: "me",
+                    q:
+                        "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:30d",
+                    maxResults: 50,
+                    pageToken: undefined,
+                });
+
+            expect(messagesGet)
+                .toHaveBeenCalledTimes(2);
+
+            expect(
+                mocks.ingestGmailEmail,
+            ).toHaveBeenCalledTimes(2);
+
+            expect(
+                mocks.ingestGmailEmail,
+            ).toHaveBeenNthCalledWith(
+                1,
+                expect.objectContaining({
+                    userId: "user-1",
+                    gmailMessageId:
+                        "missed-transaction-1",
+                }),
+            );
+
+            expect(
+                mocks.ingestGmailEmail,
+            ).toHaveBeenNthCalledWith(
+                2,
+                expect.objectContaining({
+                    userId: "user-1",
+                    gmailMessageId:
+                        "missed-transaction-2",
+                }),
+            );
+
+            expect(result).toEqual(
+                expect.objectContaining({
+                    fetched: 2,
+                    transactionsCreated: 2,
+                    duplicates: 0,
+                    skipped: 0,
+                }),
+            );
+
+            expect(
+                mocks.gmailAccountUpdate,
+            ).toHaveBeenCalledWith({
+                where: {
+                    id: "gmail-account-2",
+                },
+                data: expect.objectContaining({
+                    historyId:
+                        "history-after-reconnect",
+                    lastSyncAt:
+                        expect.any(Date),
+                }),
+            });
+        });
+    });
 });

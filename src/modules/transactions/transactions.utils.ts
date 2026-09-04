@@ -1,7 +1,5 @@
 import {CategoryAssignmentSource, MerchantMappingSource, Prisma, TransactionType,} from "@prisma/client";
 
-import {resolveManualTransactionMerchant,} from "../merchant/merchant.service";
-
 import {ResolveTransactionMerchantResult,} from "../merchant/merchant.types";
 
 import {postTransactionToLedger,} from "../ledger/ledger.service";
@@ -13,7 +11,9 @@ import {prisma} from "../../database/prisma";
 export type TransactionSortBy =
     | "date"
     | "createdAt"
-    | "amount";
+    | "amount"
+    | "merchant"
+    | "category";
 
 export type SortOrder =
     | "asc"
@@ -818,21 +818,33 @@ export async function resolveTransactionUpdate({
 }
 
 
-export function getTransactionOrderBy(
-    sortBy: TransactionSortBy = "date",
-    order: SortOrder = "desc",
-): Prisma.TransactionOrderByWithRelationInput {
-
+export const getTransactionOrderBy = (
+    sortBy: TransactionSortBy,
+    order: SortOrder,
+): Prisma.TransactionOrderByWithRelationInput => {
     switch (sortBy) {
+        case "amount":
+            return {
+                amount: order,
+            };
 
         case "createdAt":
             return {
                 createdAt: order,
             };
 
-        case "amount":
+        case "merchant":
             return {
-                amount: order,
+                merchant: {
+                    name: order,
+                },
+            };
+
+        case "category":
+            return {
+                category: {
+                    name: order,
+                },
             };
 
         case "date":
@@ -841,4 +853,4 @@ export function getTransactionOrderBy(
                 date: order,
             };
     }
-}
+};

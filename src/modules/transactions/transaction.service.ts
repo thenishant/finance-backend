@@ -1,4 +1,4 @@
-import {CategoryAssignmentSource, Prisma, TransactionType,} from "@prisma/client";
+import {CategoryAssignmentSource, FinancialAccountType, Prisma, TransactionType,} from "@prisma/client";
 
 import {prisma} from "../../database/prisma";
 
@@ -22,6 +22,7 @@ import {
     validateTransactionBasics,
     validateTransactionCategory,
 } from "./transactions.utils";
+import {GetTransactionsQuery} from "./transaction.dto";
 
 type CreateTransactionInput = {
     type: TransactionType;
@@ -51,6 +52,7 @@ export type TransactionFilters = {
     type?: TransactionType;
     categoryId?: string;
     accountId?: string;
+    accountType?: FinancialAccountType;
     from?: string | Date;
     to?: string | Date;
 };
@@ -105,31 +107,52 @@ const serializeTransactions = <
 
 const buildTransactionWhere = (
     userId: string,
-    filters: TransactionFilters = {},
+    filters: TransactionFilters,
 ): Prisma.TransactionWhereInput => {
-    const where: Prisma.TransactionWhereInput =
-        activeTransactionWhere(userId);
+    const where: Prisma.TransactionWhereInput = {
+        ...activeTransactionWhere(userId),
+    };
+
+    const and: Prisma.TransactionWhereInput[] = [];
 
     if (filters.type) {
         where.type = filters.type;
     }
 
     if (filters.categoryId) {
-        where.categoryId =
-            filters.categoryId;
+        where.categoryId = filters.categoryId;
     }
 
     if (filters.accountId) {
-        where.OR = [
-            {
-                sourceAccountId:
-                filters.accountId,
-            },
-            {
-                destinationAccountId:
-                filters.accountId,
-            },
-        ];
+        and.push({
+            OR: [
+                {
+                    sourceAccountId:
+                    filters.accountId,
+                },
+                {
+                    destinationAccountId:
+                    filters.accountId,
+                },
+            ],
+        });
+    }
+
+    if (filters.accountType) {
+        and.push({
+            OR: [
+                {
+                    sourceAccount: {
+                        type: filters.accountType,
+                    },
+                },
+                {
+                    destinationAccount: {
+                        type: filters.accountType,
+                    },
+                },
+            ],
+        });
     }
 
     if (filters.from || filters.to) {
@@ -139,9 +162,7 @@ const buildTransactionWhere = (
                     gte:
                         filters.from instanceof Date
                             ? filters.from
-                            : new Date(
-                                filters.from,
-                            ),
+                            : new Date(filters.from),
                 }
                 : {}),
 
@@ -150,12 +171,14 @@ const buildTransactionWhere = (
                     lte:
                         filters.to instanceof Date
                             ? filters.to
-                            : new Date(
-                                filters.to,
-                            ),
+                            : new Date(filters.to),
                 }
                 : {}),
         };
+    }
+
+    if (and.length) {
+        where.AND = and;
     }
 
     return where;
@@ -531,25 +554,22 @@ export const getRecentTransactions = async (
 
 export const getTransactions = async (
     userId: string,
-    sortBy: TransactionSortBy = "date",
-    order: SortOrder = "desc",
-    filters: TransactionFilters = {},
+    query: GetTransactionsQuery,
 ) => {
     const transactions =
         await prisma.transaction.findMany({
-            where:
-                buildTransactionWhere(
-                    userId,
-                    filters,
-                ),
+            where: buildTransactionWhere(
+                userId,
+                query,
+            ),
 
             include:
             transactionInclude,
 
             orderBy:
                 getTransactionOrderBy(
-                    sortBy,
-                    order,
+                    query.sortBy,
+                    query.order,
                 ),
         });
 

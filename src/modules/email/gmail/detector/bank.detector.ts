@@ -1,20 +1,30 @@
 export enum BankProvider {
-    AXIS = "AXIS", HDFC = "HDFC", SBI = "SBI", UNKNOWN = "UNKNOWN"
+    AXIS = "AXIS",
+    HDFC = "HDFC",
+    SBI = "SBI",
+    UNKNOWN = "UNKNOWN",
 }
 
-export const detectBankProvider = (sender?: string | null): BankProvider => {
+const BANK_SENDERS = {
+    AXIS: "alerts@axis.bank.in",
+    HDFC: "hdfcbank.bank.in",
+    SBI: "alerts.sbi.bank.in",
+} as const;
 
-    const from = sender?.toLowerCase() ?? "";
+export const detectBankProvider = (
+    sender?: string | null,
+): BankProvider => {
+    const normalizedSender = sender?.toLowerCase() ?? "";
 
-    if (from.includes("alerts@axis.bank.in")) {
+    if (normalizedSender.includes(BANK_SENDERS.AXIS)) {
         return BankProvider.AXIS;
     }
 
-    if (from.endsWith("@hdfcbank.bank.in") || from.includes("hdfcbank.bank.in")) {
+    if (normalizedSender.includes(BANK_SENDERS.HDFC)) {
         return BankProvider.HDFC;
     }
 
-    if (from.includes("alerts.sbi.bank.in")) {
+    if (normalizedSender.includes(BANK_SENDERS.SBI)) {
         return BankProvider.SBI;
     }
 

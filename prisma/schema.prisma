@@ -137,35 +137,18 @@ model MonthlyAnalytics {
 }
 
 model GmailAccount {
-  id             String         @id @default(uuid())
-  userId         String         @unique
-  email          String         @unique
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  email          String    @unique
   refreshToken   String
   accessToken    String?
   expiresAt      DateTime?
   lastSyncAt     DateTime?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
   historyId      String?
-  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages       GmailMessage[]
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   watchExpiresAt DateTime?
-}
-
-model GmailMessage {
-  id             String       @id @default(uuid())
-  gmailMessageId String       @unique
-  gmailAccountId String
-  sender         String?
-  subject        String?
-  body           String
-  processed      Boolean      @default(false)
-  createdAt      DateTime     @default(now())
-  receivedAt     DateTime?
-  gmailAccount   GmailAccount @relation(fields: [gmailAccountId], references: [id], onDelete: Cascade)
-
-  @@index([gmailAccountId])
-  @@index([processed])
 }
 
 model FinancialAccount {
