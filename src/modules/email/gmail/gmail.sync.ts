@@ -24,6 +24,12 @@ type IngestionResult = Awaited<
     ReturnType<typeof ingestGmailEmail>
 >;
 
+type ProcessMessageResult =
+    | IngestionResult
+    | {
+    status: "not-found";
+};
+
 const activeSyncs = new Map<string, Promise<GmailSyncStats>>();
 
 class GmailHistoryExpiredError extends Error {
@@ -64,7 +70,9 @@ const getErrorMessage = (error: unknown): string => {
 
     const message = (error as { message?: unknown }).message;
 
-    return typeof message === "string" ? message.toLowerCase() : "";
+    return typeof message === "string"
+        ? message.toLowerCase()
+        : "";
 };
 
 const getErrorReason = (error: unknown): string => {
@@ -110,7 +118,11 @@ const retry = async <T>(
 ): Promise<T> => {
     let lastError: unknown;
 
-    for (let attempt = 1; attempt <= attempts; attempt++) {
+    for (
+        let attempt = 1;
+        attempt <= attempts;
+        attempt++
+    ) {
         try {
             return await operation();
         } catch (error) {
@@ -121,7 +133,9 @@ const retry = async <T>(
             if (
                 status === 401 ||
                 status === 403 ||
-                (status !== undefined && status >= 400 && status < 500)
+                (status !== undefined &&
+                    status >= 400 &&
+                    status < 500)
             ) {
                 throw error;
             }
@@ -191,7 +205,9 @@ const extractBody = (
         (part) => part.mimeType === "text/html",
     );
 
-    return htmlPart ? decodeBase64(htmlPart.body?.data) : "";
+    return htmlPart
+        ? decodeBase64(htmlPart.body?.data)
+        : "";
 };
 
 const getHeader = (
@@ -199,7 +215,8 @@ const getHeader = (
     name: string,
 ): string | null =>
     headers.find(
-        (header) => header.name?.toLowerCase() === name.toLowerCase(),
+        (header) =>
+            header.name?.toLowerCase() === name.toLowerCase(),
     )?.value ?? null;
 
 const saveCheckpoint = async (
@@ -242,17 +259,35 @@ export const processMessage = async (
     gmail: gmail_v1.Gmail,
     userId: string,
     messageId: string,
-): Promise<IngestionResult> => {
-    const detail = await retry(
-        () =>
-            gmail.users.messages.get({
-                userId: "me",
-                id: messageId,
-            }),
-        `Fetch Gmail message ${messageId}`,
-    );
+): Promise<ProcessMessageResult> => {
+    let detail: gmail_v1.Schema$Message;
 
-    const payload = detail.data.payload;
+    try {
+        detail = (
+            await retry(
+                () =>
+                    gmail.users.messages.get({
+                        userId: "me",
+                        id: messageId,
+                    }),
+                `Fetch Gmail message ${messageId}`,
+            )
+        ).data;
+    } catch (error) {
+        if (getErrorStatus(error) === 404) {
+            console.warn(
+                `[Gmail] Message no longer available; skipping ${messageId}`,
+            );
+
+            return {
+                status: "not-found",
+            };
+        }
+
+        throw error;
+    }
+
+    const payload = detail.payload;
     const headers = payload?.headers ?? [];
 
     return ingestGmailEmail({
@@ -261,8 +296,8 @@ export const processMessage = async (
         sender: getHeader(headers, "from"),
         subject: getHeader(headers, "subject"),
         body: cleanEmailBody(extractBody(payload)),
-        receivedAt: detail.data.internalDate
-            ? new Date(Number(detail.data.internalDate))
+        receivedAt: detail.internalDate
+            ? new Date(Number(detail.internalDate))
             : null,
     });
 };
@@ -298,6 +333,14 @@ const processMessages = async (
 
                 case "duplicate":
                     stats.duplicates++;
+                    break;
+
+                case "not-found":
+                    stats.skipped++;
+
+                    console.info(
+                        `[${label}] Message no longer available; skipped ${message.id}`,
+                    );
                     break;
 
                 default:
@@ -414,8 +457,10 @@ export const performIncrementalSync = async (
             console.info("[Gmail] History page", {
                 startHistoryId,
                 responseHistoryId: response.historyId,
-                historyRecords: response.history?.length ?? 0,
-                nextPageToken: response.nextPageToken ?? null,
+                historyRecords:
+                    response.history?.length ?? 0,
+                nextPageToken:
+                    response.nextPageToken ?? null,
             });
 
             latestHistoryId =
@@ -431,7 +476,8 @@ export const performIncrementalSync = async (
                 }
             }
 
-            pageToken = response.nextPageToken || undefined;
+            pageToken =
+                response.nextPageToken || undefined;
         } while (pageToken);
     } catch (error) {
         if (getErrorStatus(error) === 404) {
@@ -484,7 +530,10 @@ export const syncMailbox = async (
         return existingSync;
     }
 
-    const syncPromise = executeSyncMailbox(userId, options);
+    const syncPromise = executeSyncMailbox(
+        userId,
+        options,
+    );
 
     activeSyncs.set(userId, syncPromise);
 
@@ -505,7 +554,8 @@ const executeSyncMailbox = async (
     let gmailAccount: GmailAccount | null = null;
 
     try {
-        gmailAccount = await getConnectedGmailAccount(userId);
+        gmailAccount =
+            await getConnectedGmailAccount(userId);
 
         const gmail = createGmailClient(
             gmailAccount.refreshToken,

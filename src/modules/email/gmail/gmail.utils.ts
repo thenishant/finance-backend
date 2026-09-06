@@ -6,7 +6,7 @@ import {prisma} from "../../../database/prisma";
 const JWT_SECRET = process.env.JWT_SECRET!;
 
 export const GMAIL_QUERY =
-    "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:30d";
+    "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:4d";
 
 export const GOOGLE_SCOPES = [
     "openid",

@@ -1315,7 +1315,116 @@ describe("gmail.sync", () => {
                 "Gmail history expired",
             );
         });
+        it("skips deleted Gmail messages and advances the incremental checkpoint", async () => {
+            const messagesGet = vi
+                .fn()
+                .mockRejectedValueOnce({
+                    code: 404,
+                    response: {
+                        status: 404,
+                    },
+                    message: "Requested entity was not found.",
+                })
+                .mockResolvedValueOnce({
+                    data: {
+                        id: "message-2",
+                        internalDate: "1788714000000",
+                        payload: {
+                            headers: [
+                                {
+                                    name: "From",
+                                    value: "alerts@axis.bank.in",
+                                },
+                                {
+                                    name: "Subject",
+                                    value: "Transaction alert",
+                                },
+                            ],
+                            body: {
+                                data: Buffer.from(
+                                    "transaction email body",
+                                ).toString("base64"),
+                            },
+                        },
+                    },
+                });
 
+            const gmail = {
+                users: {
+                    messages: {
+                        get: messagesGet,
+                    },
+                    history: {
+                        list: vi.fn().mockResolvedValue({
+                            data: {
+                                historyId: "4872552",
+                                history: [
+                                    {
+                                        messagesAdded: [
+                                            {
+                                                message: {
+                                                    id: "deleted-message",
+                                                },
+                                            },
+                                            {
+                                                message: {
+                                                    id: "message-2",
+                                                },
+                                            },
+                                        ],
+                                    },
+                                ],
+                                nextPageToken: null,
+                            },
+                        }),
+                    },
+                },
+            } as any;
+
+            mocks.ingestGmailEmail.mockResolvedValue({
+                status: "created",
+                transactionId: "transaction-2",
+            });
+
+            const result = await performIncrementalSync(
+                gmail,
+                {
+                    id: "gmail-account-1",
+                    userId: "user-1",
+                    email: "test@gmail.com",
+                    refreshToken: "refresh-token",
+                    historyId: "4870848",
+                } as any,
+                "user-1",
+            );
+
+            expect(messagesGet).toHaveBeenCalledTimes(2);
+
+            expect(mocks.ingestGmailEmail).toHaveBeenCalledTimes(1);
+            expect(mocks.ingestGmailEmail).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    gmailMessageId: "message-2",
+                }),
+            );
+
+            expect(result).toMatchObject({
+                fetched: 2,
+                transactionsCreated: 1,
+                duplicates: 0,
+                skipped: 1,
+                nextPageToken: null,
+            });
+
+            expect(mocks.gmailAccountUpdate).toHaveBeenCalledWith({
+                where: {
+                    id: "gmail-account-1",
+                },
+                data: {
+                    historyId: "4872552",
+                    lastSyncAt: expect.any(Date),
+                },
+            });
+        });
     });
 
     // ---------------------------------------------------------------------
