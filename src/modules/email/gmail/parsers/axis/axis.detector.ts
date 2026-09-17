@@ -1,11 +1,10 @@
-import {
-    AxisEmailFormat,
-} from "./axis.type";
+import {AxisEmailFormat,} from "./axis.type";
 
 
 const normalizeText = (
     value?: string | null,
 ): string => {
+
     return (
         value
             ?.replace(/\s+/g, " ")
@@ -19,6 +18,7 @@ export const detectAxisEmailFormat = (
     subject?: string | null,
     body?: string | null,
 ): AxisEmailFormat | null => {
+
     const normalizedSubject =
         normalizeText(subject);
 
@@ -27,6 +27,10 @@ export const detectAxisEmailFormat = (
 
     const subjectLower =
         normalizedSubject.toLowerCase();
+
+    const combinedText =
+        `${normalizedSubject} ${normalizedBody}`;
+
 
     /*
      * Ignore obvious non-transaction emails.
@@ -42,13 +46,6 @@ export const detectAxisEmailFormat = (
     /*
      * ----------------------------------------------------------------------
      * Burgundy Debit
-     *
-     * Subject:
-     * Debit transaction alert for Axis Bank A/c
-     *
-     * Body:
-     * ... has been debited with INR 14500.00
-     * ... by ACH-DR-Indian Clearing Cor.
      * ----------------------------------------------------------------------
      */
 
@@ -99,13 +96,6 @@ export const detectAxisEmailFormat = (
     /*
      * ----------------------------------------------------------------------
      * Credit Card
-     *
-     * Subject:
-     * INR 12 spent on credit card no. XX1256
-     *
-     * Body:
-     * Transaction Amount:
-     * INR 12
      * ----------------------------------------------------------------------
      */
 
@@ -121,7 +111,7 @@ export const detectAxisEmailFormat = (
         )
         &&
         /credit\s*card/i.test(
-            `${normalizedSubject} ${normalizedBody}`,
+            combinedText,
         )
     ) {
         return AxisEmailFormat.CREDIT_CARD;
@@ -131,13 +121,6 @@ export const detectAxisEmailFormat = (
     /*
      * ----------------------------------------------------------------------
      * Standard Account Debit
-     *
-     * Subject:
-     * INR 160.00 was debited from your A/c no. XX0999.
-     *
-     * Body:
-     * Amount Debited:
-     * INR 160.00
      * ----------------------------------------------------------------------
      */
 

@@ -12,6 +12,7 @@ export const mapTransaction = <
         category?: {
             name: string;
             parent?: {
+
                 id: string;
                 name: string;
             } | null;

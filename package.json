@@ -15,7 +15,8 @@
     "postinstall": "prisma generate",
     "prisma-migrate": "npx prisma migrate dev",
     "test:coverage": "dotenv -e .env.test -- vitest run --coverage",
-    "gmail:backfill": "dotenv -e .env.prod -- tsx src/scripts/backfill-gmail-transactions.ts"
+    "gmail:backfill": "dotenv -e .env.prod -- tsx src/scripts/backfill-gmail-transactions.ts",
+    "merchant:backfill": "dotenv -e .env.prod -- tsx src/scripts/backfill-merchant-duplicates.ts"
   },
   "keywords": [],
   "author": "",

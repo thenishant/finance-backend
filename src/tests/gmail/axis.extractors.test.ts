@@ -1,4 +1,4 @@
-import {describe, expect, it} from "vitest";
+import {describe, expect, it,} from "vitest";
 
 import {
     extractAxisAccountLast4,
@@ -12,8 +12,11 @@ import {
 
 
 describe("Axis extractors", () => {
+
     describe("extractAxisAmount", () => {
+
         it("extracts an amount", () => {
+
             expect(
                 extractAxisAmount(
                     "Amount Debited: INR 1,250.00",
@@ -24,7 +27,9 @@ describe("Axis extractors", () => {
             ).toBe(1250);
         });
 
+
         it("handles amounts without commas", () => {
+
             expect(
                 extractAxisAmount(
                     "Amount Credited: INR 110.00",
@@ -35,7 +40,9 @@ describe("Axis extractors", () => {
             ).toBe(110);
         });
 
+
         it("returns null when no amount matches", () => {
+
             expect(
                 extractAxisAmount(
                     "No transaction amount",
@@ -49,7 +56,9 @@ describe("Axis extractors", () => {
 
 
     describe("extractAxisAccountLast4", () => {
+
         it("extracts account last 4 digits", () => {
+
             expect(
                 extractAxisAccountLast4(
                     "Account Number: XX0999",
@@ -57,7 +66,9 @@ describe("Axis extractors", () => {
             ).toBe("0999");
         });
 
+
         it("extracts account last 4 digits from A/c no.", () => {
+
             expect(
                 extractAxisAccountLast4(
                     "A/c no. XX1234",
@@ -65,7 +76,9 @@ describe("Axis extractors", () => {
             ).toBe("1234");
         });
 
+
         it("supports longer masking", () => {
+
             expect(
                 extractAxisAccountLast4(
                     "A/c no. XXXX1234",
@@ -73,7 +86,9 @@ describe("Axis extractors", () => {
             ).toBe("1234");
         });
 
+
         it("extracts credit card last 4 digits", () => {
+
             expect(
                 extractAxisAccountLast4(
                     "Credit Card No. XX1256",
@@ -81,7 +96,9 @@ describe("Axis extractors", () => {
             ).toBe("1256");
         });
 
+
         it("returns null when account/card is absent", () => {
+
             expect(
                 extractAxisAccountLast4(
                     "No account information",
@@ -92,7 +109,9 @@ describe("Axis extractors", () => {
 
 
     describe("extractAxisTransactionInfo", () => {
+
         it("extracts a normal merchant", () => {
+
             expect(
                 extractAxisTransactionInfo(
                     `
@@ -105,7 +124,9 @@ describe("Axis extractors", () => {
             ).toBe("SWIGGY");
         });
 
+
         it("extracts merchant from inline Transaction Info", () => {
+
             expect(
                 extractAxisTransactionInfo(
                     "Transaction Info: SWIGGY",
@@ -113,20 +134,99 @@ describe("Axis extractors", () => {
             ).toBe("SWIGGY");
         });
 
-        it("extracts merchant from UPI transaction info", () => {
+
+        it("extracts the counterparty from UPI P2M transactions", () => {
+
             expect(
                 extractAxisTransactionInfo(
                     `
                     Transaction Info:
                     UPI/P2M/660615862577/SHAKILA THAPA
 
-                    If this transaction was not initiated by you:
+                    If this transaction was not initiated by you
                     `,
                 ),
             ).toBe("SHAKILA THAPA");
         });
 
+
+        it("extracts the counterparty from flattened UPI P2M transactions", () => {
+
+            expect(
+                extractAxisTransactionInfo(
+                    "Transaction Info: UPI P2M 660615862577 SHAKILA THAPA",
+                ),
+            ).toBe("SHAKILA THAPA");
+        });
+
+
+        it("extracts the counterparty from UPI P2A transactions", () => {
+
+            expect(
+                extractAxisTransactionInfo(
+                    `
+                    Transaction Info:
+                    UPI/P2A/624207512807/DEEPANSHU/SBIN/Birt
+
+                    If this transaction was not initiated by you
+                    `,
+                ),
+            ).toBe("DEEPANSHU");
+        });
+
+
+        it("extracts a multi-word UPI P2A counterparty", () => {
+
+            expect(
+                extractAxisTransactionInfo(
+                    `
+                    Transaction Info:
+                    UPI/P2A/623545792613/BAJARANGI KUMAR
+
+                    If this transaction was not initiated by you
+                    `,
+                ),
+            ).toBe("BAJARANGI KUMAR");
+        });
+
+
+        it("returns null for an uninformative POS identifier", () => {
+
+            expect(
+                extractAxisTransactionInfo(
+                    `
+                    Transaction Info:
+                    pos.11329019@indus
+
+                    If this transaction was not initiated by you
+                    `,
+                ),
+            ).toBeNull();
+        });
+
+
+        it("returns null for UPI P2M reference without a counterparty", () => {
+
+            expect(
+                extractAxisTransactionInfo(
+                    "Transaction Info: UPI/P2M/660615862577",
+                ),
+            ).toBeNull();
+        });
+
+
+        it("returns null for UPI P2A reference without a counterparty", () => {
+
+            expect(
+                extractAxisTransactionInfo(
+                    "Transaction Info: UPI/P2A/624207512807",
+                ),
+            ).toBeNull();
+        });
+
+
         it("removes trailing punctuation", () => {
+
             expect(
                 extractAxisTransactionInfo(
                     "Transaction Info: SWIGGY.",
@@ -134,7 +234,9 @@ describe("Axis extractors", () => {
             ).toBe("SWIGGY");
         });
 
+
         it("does not include flattened footer content", () => {
+
             expect(
                 extractAxisTransactionInfo(
                     "Transaction Info: SWIGGY Feel free to contact us.",
@@ -142,7 +244,9 @@ describe("Axis extractors", () => {
             ).toBe("SWIGGY");
         });
 
+
         it("returns null when Transaction Info is absent", () => {
+
             expect(
                 extractAxisTransactionInfo(
                     "Amount Debited: INR 1250",
@@ -153,7 +257,9 @@ describe("Axis extractors", () => {
 
 
     describe("extractAxisCreditCardMerchant", () => {
+
         it("extracts credit card merchant", () => {
+
             expect(
                 extractAxisCreditCardMerchant(
                     `
@@ -167,7 +273,9 @@ describe("Axis extractors", () => {
             ).toBe("ASSPL");
         });
 
+
         it("extracts inline credit card merchant", () => {
+
             expect(
                 extractAxisCreditCardMerchant(
                     "Merchant Name: ASSPL",
@@ -175,7 +283,9 @@ describe("Axis extractors", () => {
             ).toBe("ASSPL");
         });
 
+
         it("removes trailing punctuation", () => {
+
             expect(
                 extractAxisCreditCardMerchant(
                     "Merchant Name: ASSPL.",
@@ -186,7 +296,9 @@ describe("Axis extractors", () => {
 
 
     describe("extractAxisBurgundyCounterparty", () => {
+
         it("extracts Burgundy debit counterparty", () => {
+
             expect(
                 extractAxisBurgundyCounterparty(
                     `
@@ -195,10 +307,14 @@ describe("Axis extractors", () => {
                     by ACH-DR-Indian Clearing Cor.
                     `,
                 ),
-            ).toBe("ACH-DR-Indian Clearing Cor");
+            ).toBe(
+                "ACH-DR-Indian Clearing Cor",
+            );
         });
 
+
         it("extracts Burgundy credit counterparty", () => {
+
             expect(
                 extractAxisBurgundyCounterparty(
                     `
@@ -207,26 +323,38 @@ describe("Axis extractors", () => {
                     by ACH-CR-BIKAJI FOODS INT LT.
                     `,
                 ),
-            ).toBe("ACH-CR-BIKAJI FOODS INT LT");
+            ).toBe(
+                "ACH-CR-BIKAJI FOODS INT LT",
+            );
         });
 
+
         it("removes trailing punctuation", () => {
+
             expect(
                 extractAxisBurgundyCounterparty(
                     "by ACH-DR-Indian Clearing Cor.",
                 ),
-            ).toBe("ACH-DR-Indian Clearing Cor");
+            ).toBe(
+                "ACH-DR-Indian Clearing Cor",
+            );
         });
 
+
         it("does not include flattened footer content", () => {
+
             expect(
                 extractAxisBurgundyCounterparty(
                     "by ACH-CR-BIKAJI FOODS INT LT. Feel free to contact us.",
                 ),
-            ).toBe("ACH-CR-BIKAJI FOODS INT LT");
+            ).toBe(
+                "ACH-CR-BIKAJI FOODS INT LT",
+            );
         });
 
+
         it("returns null when counterparty is absent", () => {
+
             expect(
                 extractAxisBurgundyCounterparty(
                     "has been debited with INR 14500.00",
@@ -237,29 +365,43 @@ describe("Axis extractors", () => {
 
 
     describe("parseAxisDate", () => {
+
         it("parses a four digit year", () => {
-            const result = parseAxisDate(
-                "28-08-2026",
-                "20:40:27",
-            );
+
+            const result =
+                parseAxisDate(
+                    "28-08-2026",
+                    "20:40:27",
+                );
+
 
             expect(result).toEqual(
-                new Date("2026-08-28T20:40:27+05:30"),
+                new Date(
+                    "2026-08-28T20:40:27+05:30",
+                ),
             );
         });
+
 
         it("parses a two digit year", () => {
-            const result = parseAxisDate(
-                "28-08-26",
-                "20:40:27",
-            );
+
+            const result =
+                parseAxisDate(
+                    "28-08-26",
+                    "20:40:27",
+                );
+
 
             expect(result).toEqual(
-                new Date("2026-08-28T20:40:27+05:30"),
+                new Date(
+                    "2026-08-28T20:40:27+05:30",
+                ),
             );
         });
 
+
         it("returns undefined for invalid date", () => {
+
             expect(
                 parseAxisDate(
                     "invalid",
@@ -268,7 +410,9 @@ describe("Axis extractors", () => {
             ).toBeUndefined();
         });
 
+
         it("returns undefined for invalid time", () => {
+
             expect(
                 parseAxisDate(
                     "28-08-2026",
@@ -280,87 +424,62 @@ describe("Axis extractors", () => {
 
 
     describe("extractAxisDate", () => {
+
         it("extracts standard date and time", () => {
-            const result = extractAxisDate(
-                "Date & Time: 28-08-2026, 07:59:41 IST",
-            );
+
+            const result =
+                extractAxisDate(
+                    "Date & Time: 28-08-2026, 07:59:41 IST",
+                );
+
 
             expect(result).toEqual(
-                new Date("2026-08-28T07:59:41+05:30"),
+                new Date(
+                    "2026-08-28T07:59:41+05:30",
+                ),
             );
         });
+
 
         it("supports two digit year", () => {
-            const result = extractAxisDate(
-                "Date & Time: 28-08-26, 20:40:27 IST",
-            );
+
+            const result =
+                extractAxisDate(
+                    "Date & Time: 28-08-26, 20:40:27 IST",
+                );
+
 
             expect(result).toEqual(
-                new Date("2026-08-28T20:40:27+05:30"),
+                new Date(
+                    "2026-08-28T20:40:27+05:30",
+                ),
             );
         });
+
 
         it("supports 'at' before time", () => {
-            const result = extractAxisDate(
-                "27-08-2026 at 08:29:30 IST",
-            );
+
+            const result =
+                extractAxisDate(
+                    "27-08-2026 at 08:29:30 IST",
+                );
+
 
             expect(result).toEqual(
-                new Date("2026-08-27T08:29:30+05:30"),
+                new Date(
+                    "2026-08-27T08:29:30+05:30",
+                ),
             );
         });
 
+
         it("returns undefined when date is absent", () => {
+
             expect(
                 extractAxisDate(
                     "No date information",
                 ),
             ).toBeUndefined();
-        });
-    });
-    describe("extractAxisTransactionInfo", () => {
-        it("extracts the counterparty from UPI P2M transactions", () => {
-            const body = `
-            Transaction Info: UPI/P2M/660615862577/SHAKILA THAPA
-            If this transaction was not initiated by you
-        `;
-
-            expect(
-                extractAxisTransactionInfo(body),
-            ).toBe("SHAKILA THAPA");
-        });
-
-        it("extracts the counterparty from UPI P2A transactions", () => {
-            const body = `
-            Transaction Info: UPI/P2A/624207512807/DEEPANSHU/SBIN/Birt
-            If this transaction was not initiated by you
-        `;
-
-            expect(
-                extractAxisTransactionInfo(body),
-            ).toBe("DEEPANSHU");
-        });
-
-        it("extracts a multi-word UPI counterparty", () => {
-            const body = `
-            Transaction Info: UPI/P2A/623545792613/BAJARANGI KUMAR
-            If this transaction was not initiated by you
-        `;
-
-            expect(
-                extractAxisTransactionInfo(body),
-            ).toBe("BAJARANGI KUMAR");
-        });
-
-        it("returns null for an uninformative POS identifier", () => {
-            const body = `
-            Transaction Info: pos.11329019@indus
-            If this transaction was not initiated by you
-        `;
-
-            expect(
-                extractAxisTransactionInfo(body),
-            ).toBeNull();
         });
     });
 });

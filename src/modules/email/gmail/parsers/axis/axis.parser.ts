@@ -12,54 +12,24 @@ import {
 
 import {AxisEmailFormat, AxisParserContext,} from "./axis.type";
 
-
-export const parseAxisEmail = (
-    subject: string,
-    body: string,
-): ParsedTransaction | null => {
-
-    const format =
-        detectAxisEmailFormat(
-            subject,
-            body,
-        );
-
+export const parseAxisEmail = (subject: string, body: string,): ParsedTransaction | null => {
+    const format = detectAxisEmailFormat(subject, body);
     if (!format) {
         return null;
     }
 
-    const context: AxisParserContext = {
-        subject,
-        body,
-    };
-
+    const context: AxisParserContext = {subject, body};
     switch (format) {
-
         case AxisEmailFormat.ACCOUNT_DEBIT:
-            return parseAxisAccountDebit(
-                context,
-            );
-
+            return parseAxisAccountDebit(context);
         case AxisEmailFormat.ACCOUNT_CREDIT:
-            return parseAxisAccountCredit(
-                context,
-            );
-
+            return parseAxisAccountCredit(context);
         case AxisEmailFormat.CREDIT_CARD:
-            return parseAxisCreditCard(
-                context,
-            );
-
+            return parseAxisCreditCard(context);
         case AxisEmailFormat.BURGUNDY_DEBIT:
-            return parseAxisBurgundyDebit(
-                context,
-            );
-
+            return parseAxisBurgundyDebit(context);
         case AxisEmailFormat.BURGUNDY_CREDIT:
-            return parseAxisBurgundyCredit(
-                context,
-            );
-
+            return parseAxisBurgundyCredit(context);
         default:
             return null;
     }

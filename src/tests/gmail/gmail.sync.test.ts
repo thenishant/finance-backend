@@ -6,22 +6,36 @@ import {
     processMessage,
     syncMailbox,
 } from "../../modules/email/gmail/gmail.sync";
+
 import {GmailReconnectRequiredError} from "../../error/GmailReconnectRequiredError";
 
 const mocks = vi.hoisted(() => ({
     ingestGmailEmail: vi.fn(),
+
     createGmailClient: vi.fn(),
     getConnectedGmailAccount: vi.fn(),
+    buildGmailQuery: vi.fn(),
 
     gmailAccountFindUnique: vi.fn(),
     gmailAccountUpdate: vi.fn(),
     gmailAccountDelete: vi.fn(),
+
+    userFindUnique: vi.fn(),
+    userUpdate: vi.fn(),
 }));
 
 vi.mock(
     "../../database/prisma",
     () => ({
         prisma: {
+            user: {
+                findUnique:
+                mocks.userFindUnique,
+
+                update:
+                mocks.userUpdate,
+            },
+
             gmailAccount: {
                 findUnique:
                 mocks.gmailAccountFindUnique,
@@ -32,6 +46,11 @@ vi.mock(
                 delete:
                 mocks.gmailAccountDelete,
             },
+
+            $transaction:
+                vi.fn(async (operations) => {
+                    return Promise.all(operations);
+                }),
         },
     }),
 );
@@ -47,8 +66,8 @@ vi.mock(
 vi.mock(
     "../../modules/email/gmail/gmail.utils",
     () => ({
-        GMAIL_QUERY:
-            "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:30d",
+        buildGmailQuery:
+        mocks.buildGmailQuery,
 
         createGmailClient:
         mocks.createGmailClient,
@@ -77,21 +96,29 @@ const createGmailMessage = ({
     id: string;
 }) => ({
     id,
-    internalDate: String(Date.now()),
+
+    internalDate:
+        String(Date.now()),
+
     payload: {
         headers: [
             {
                 name: "From",
-                value: "alerts@axis.bank.in",
+                value:
+                    "alerts@axis.bank.in",
             },
+
             {
                 name: "Subject",
-                value: "Transaction alert",
+                value:
+                    "Transaction alert",
             },
         ],
+
         body: {
             data: "",
         },
+
         parts: [],
     },
 });
@@ -104,16 +131,26 @@ describe("gmail.sync", () => {
         mocks.ingestGmailEmail
             .mockResolvedValue({
                 status: "created",
-                transactionId: "transaction-1",
+                transactionId:
+                    "transaction-1",
             });
 
         mocks.gmailAccountFindUnique
             .mockResolvedValue({
-                id: "gmail-account-1",
-                userId: "user-1",
-                email: "user@gmail.com",
-                refreshToken: "refresh-token",
-                historyId: null,
+                id:
+                    "gmail-account-1",
+
+                userId:
+                    "user-1",
+
+                email:
+                    "user@gmail.com",
+
+                refreshToken:
+                    "refresh-token",
+
+                historyId:
+                    null,
             });
 
         mocks.gmailAccountUpdate
@@ -122,14 +159,57 @@ describe("gmail.sync", () => {
         mocks.gmailAccountDelete
             .mockResolvedValue({});
 
+        mocks.userUpdate
+            .mockResolvedValue({});
+
+        mocks.userFindUnique
+            .mockResolvedValue({
+                gmailLastSyncAt:
+                    null,
+            });
+
         mocks.getConnectedGmailAccount
             .mockResolvedValue({
-                id: "gmail-account-1",
-                userId: "user-1",
-                email: "user@gmail.com",
-                refreshToken: "refresh-token",
-                historyId: null,
+                id:
+                    "gmail-account-1",
+
+                userId:
+                    "user-1",
+
+                email:
+                    "user@gmail.com",
+
+                refreshToken:
+                    "refresh-token",
+
+                historyId:
+                    null,
             });
+
+        mocks.buildGmailQuery
+            .mockImplementation(
+                (
+                    lastSyncAt?: Date | null,
+                ) => {
+                    if (!lastSyncAt) {
+                        return "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:30d";
+                    }
+
+                    const backfillFrom =
+                        new Date(
+                            lastSyncAt.getTime() -
+                            24 * 60 * 60 * 1000,
+                        );
+
+                    const unixTimestamp =
+                        Math.floor(
+                            backfillFrom.getTime() /
+                            1000,
+                        );
+
+                    return `{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} after:${unixTimestamp}`;
+                },
+            );
     });
 
     // ---------------------------------------------------------------------
@@ -143,39 +223,45 @@ describe("gmail.sync", () => {
             const gmail = {
                 users: {
                     messages: {
-                        get: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    internalDate:
-                                        "1756116000000",
+                        get:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        internalDate:
+                                            "1756116000000",
 
-                                    payload: {
-                                        headers: [
-                                            {
-                                                name: "From",
-                                                value:
-                                                    "alerts@hdfcbank.bank.in",
-                                            },
-                                            {
-                                                name: "Subject",
-                                                value:
-                                                    "Rs. 500 debited",
-                                            },
-                                        ],
+                                        payload: {
+                                            headers: [
+                                                {
+                                                    name:
+                                                        "From",
 
-                                        body: {
-                                            data:
-                                                Buffer
-                                                    .from(
-                                                        "Rs. 500 has been debited",
-                                                    )
-                                                    .toString(
-                                                        "base64",
-                                                    ),
+                                                    value:
+                                                        "alerts@hdfcbank.bank.in",
+                                                },
+
+                                                {
+                                                    name:
+                                                        "Subject",
+
+                                                    value:
+                                                        "Rs. 500 debited",
+                                                },
+                                            ],
+
+                                            body: {
+                                                data:
+                                                    Buffer
+                                                        .from(
+                                                            "Rs. 500 has been debited",
+                                                        )
+                                                        .toString(
+                                                            "base64",
+                                                        ),
+                                            },
                                         },
                                     },
-                                },
-                            }),
+                                }),
                     },
                 },
             } as any;
@@ -188,7 +274,9 @@ describe("gmail.sync", () => {
                 );
 
             expect(result).toEqual({
-                status: "created",
+                status:
+                    "created",
+
                 transactionId:
                     "transaction-1",
             });
@@ -196,23 +284,32 @@ describe("gmail.sync", () => {
             expect(
                 gmail.users.messages.get,
             ).toHaveBeenCalledWith({
-                userId: "me",
-                id: "gmail-message-1",
+                userId:
+                    "me",
+
+                id:
+                    "gmail-message-1",
             });
 
             expect(
                 mocks.ingestGmailEmail,
             ).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    userId: "user-1",
+                    userId:
+                        "user-1",
+
                     gmailMessageId:
                         "gmail-message-1",
+
                     sender:
                         "alerts@hdfcbank.bank.in",
+
                     subject:
                         "Rs. 500 debited",
+
                     body:
                         "Rs. 500 has been debited",
+
                     receivedAt:
                         expect.any(Date),
                 }),
@@ -224,44 +321,49 @@ describe("gmail.sync", () => {
             const gmail = {
                 users: {
                     messages: {
-                        get: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    payload: {
-                                        headers: [],
-                                        parts: [
-                                            {
-                                                mimeType:
-                                                    "text/plain",
-                                                body: {
-                                                    data:
-                                                        Buffer
-                                                            .from(
-                                                                "plain text body",
-                                                            )
-                                                            .toString(
-                                                                "base64",
-                                                            ),
+                        get:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        payload: {
+                                            headers: [],
+
+                                            parts: [
+                                                {
+                                                    mimeType:
+                                                        "text/plain",
+
+                                                    body: {
+                                                        data:
+                                                            Buffer
+                                                                .from(
+                                                                    "plain text body",
+                                                                )
+                                                                .toString(
+                                                                    "base64",
+                                                                ),
+                                                    },
                                                 },
-                                            },
-                                            {
-                                                mimeType:
-                                                    "text/html",
-                                                body: {
-                                                    data:
-                                                        Buffer
-                                                            .from(
-                                                                "<p>html body</p>",
-                                                            )
-                                                            .toString(
-                                                                "base64",
-                                                            ),
+
+                                                {
+                                                    mimeType:
+                                                        "text/html",
+
+                                                    body: {
+                                                        data:
+                                                            Buffer
+                                                                .from(
+                                                                    "<p>html body</p>",
+                                                                )
+                                                                .toString(
+                                                                    "base64",
+                                                                ),
+                                                    },
                                                 },
-                                            },
-                                        ],
+                                            ],
+                                        },
                                     },
-                                },
-                            }),
+                                }),
                     },
                 },
             } as any;
@@ -283,26 +385,37 @@ describe("gmail.sync", () => {
         });
 
         it("uses HTML when no plain text body exists", async () => {
+
             const gmail = {
                 users: {
                     messages: {
-                        get: vi.fn().mockResolvedValue({
-                            data: {
-                                payload: {
-                                    headers: [],
-                                    parts: [
-                                        {
-                                            mimeType: "text/html",
-                                            body: {
-                                                data: Buffer
-                                                    .from("<p>html body</p>")
-                                                    .toString("base64"),
-                                            },
+                        get:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        payload: {
+                                            headers: [],
+
+                                            parts: [
+                                                {
+                                                    mimeType:
+                                                        "text/html",
+
+                                                    body: {
+                                                        data:
+                                                            Buffer
+                                                                .from(
+                                                                    "<p>html body</p>",
+                                                                )
+                                                                .toString(
+                                                                    "base64",
+                                                                ),
+                                                    },
+                                                },
+                                            ],
                                         },
-                                    ],
-                                },
-                            },
-                        }),
+                                    },
+                                }),
                     },
                 },
             } as any;
@@ -317,7 +430,8 @@ describe("gmail.sync", () => {
                 mocks.ingestGmailEmail,
             ).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    body: "html body",
+                    body:
+                        "html body",
                 }),
             );
         });
@@ -329,70 +443,109 @@ describe("gmail.sync", () => {
 
     describe("performInitialSync", () => {
 
-        it("imports listed messages and saves the history checkpoint", async () => {
+        it("imports all paginated messages and saves the history checkpoint after the final page", async () => {
+
+            const messagesList =
+                vi.fn()
+
+                    .mockResolvedValueOnce({
+                        data: {
+                            messages: [
+                                {
+                                    id:
+                                        "message-1",
+                                },
+
+                                {
+                                    id:
+                                        "message-2",
+                                },
+
+                                {},
+                            ],
+
+                            nextPageToken:
+                                "next-page",
+                        },
+                    })
+
+                    .mockResolvedValueOnce({
+                        data: {
+                            messages: [
+                                {
+                                    id:
+                                        "message-3",
+                                },
+                            ],
+
+                            nextPageToken:
+                            undefined,
+                        },
+                    });
+
+            const messagesGet =
+                vi.fn()
+                    .mockImplementation(
+                        async ({
+                                   id,
+                               }: {
+                            id: string;
+                        }) => ({
+                            data: {
+                                payload: {
+                                    headers: [],
+
+                                    body: {
+                                        data:
+                                            Buffer
+                                                .from(
+                                                    `message ${id}`,
+                                                )
+                                                .toString(
+                                                    "base64",
+                                                ),
+                                    },
+                                },
+                            },
+                        }),
+                    );
 
             const gmail = {
                 users: {
                     messages: {
-                        list: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    messages: [
-                                        {
-                                            id: "message-1",
-                                        },
-                                        {
-                                            id: "message-2",
-                                        },
-                                        {},
-                                    ],
-                                    nextPageToken:
-                                        "next-page",
-                                },
-                            }),
+                        list:
+                        messagesList,
 
-                        get: vi.fn()
-                            .mockImplementation(
-                                async ({
-                                           id,
-                                       }: {
-                                    id: string;
-                                }) => ({
-                                    data: {
-                                        payload: {
-                                            headers: [],
-                                            body: {
-                                                data:
-                                                    Buffer
-                                                        .from(
-                                                            `message ${id}`,
-                                                        )
-                                                        .toString(
-                                                            "base64",
-                                                        ),
-                                            },
-                                        },
-                                    },
-                                }),
-                            ),
+                        get:
+                        messagesGet,
                     },
 
-                    getProfile: vi.fn()
-                        .mockResolvedValue({
-                            data: {
-                                historyId:
-                                    "history-100",
-                            },
-                        }),
+                    getProfile:
+                        vi.fn()
+                            .mockResolvedValue({
+                                data: {
+                                    historyId:
+                                        "history-100",
+                                },
+                            }),
                 },
             } as any;
 
             const account = {
-                id: "gmail-account-1",
-                userId: "user-1",
-                email: "user@gmail.com",
-                refreshToken: "refresh-token",
-                historyId: null,
+                id:
+                    "gmail-account-1",
+
+                userId:
+                    "user-1",
+
+                email:
+                    "user@gmail.com",
+
+                refreshToken:
+                    "refresh-token",
+
+                historyId:
+                    null,
             };
 
             const result =
@@ -401,39 +554,125 @@ describe("gmail.sync", () => {
                     account as any,
                     "user-1",
                     {
-                        maxResults: 10,
+                        maxResults:
+                            10,
                     },
                 );
 
             expect(result.fetched)
-                .toBe(2);
+                .toBe(3);
 
             expect(
                 result.transactionsCreated,
-            ).toBe(2);
+            ).toBe(3);
 
-            expect(
-                result.duplicates,
-            ).toBe(0);
+            expect(result.duplicates)
+                .toBe(0);
 
-            expect(
-                result.skipped,
-            ).toBe(0);
+            expect(result.skipped)
+                .toBe(0);
 
             expect(
                 result.nextPageToken,
-            ).toBe("next-page");
+            ).toBeNull();
+
+            expect(messagesList)
+                .toHaveBeenCalledTimes(2);
+
+            expect(messagesList)
+                .toHaveBeenNthCalledWith(
+                    1,
+                    {
+                        userId:
+                            "me",
+
+                        q: "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:30d",
+
+                        maxResults:
+                            10,
+
+                        pageToken:
+                        undefined,
+                    },
+                );
+
+            expect(messagesList)
+                .toHaveBeenNthCalledWith(
+                    2,
+                    {
+                        userId:
+                            "me",
+
+                        q:
+                            "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:30d",
+
+                        maxResults:
+                            10,
+
+                        pageToken:
+                            "next-page",
+                    },
+                );
+
+            expect(messagesGet)
+                .toHaveBeenCalledTimes(3);
+
+            expect(
+                mocks.ingestGmailEmail,
+            ).toHaveBeenCalledTimes(3);
+
+            expect(
+                mocks.ingestGmailEmail,
+            ).toHaveBeenNthCalledWith(
+                1,
+                expect.objectContaining({
+                    userId:
+                        "user-1",
+
+                    gmailMessageId:
+                        "message-1",
+                }),
+            );
+
+            expect(
+                mocks.ingestGmailEmail,
+            ).toHaveBeenNthCalledWith(
+                2,
+                expect.objectContaining({
+                    userId:
+                        "user-1",
+
+                    gmailMessageId:
+                        "message-2",
+                }),
+            );
+
+            expect(
+                mocks.ingestGmailEmail,
+            ).toHaveBeenNthCalledWith(
+                3,
+                expect.objectContaining({
+                    userId:
+                        "user-1",
+
+                    gmailMessageId:
+                        "message-3",
+                }),
+            );
 
             expect(
                 mocks.gmailAccountUpdate,
             ).toHaveBeenCalledWith({
                 where: {
-                    id: "gmail-account-1",
+                    id:
+                        "gmail-account-1",
                 },
+
                 data:
                     expect.objectContaining({
                         historyId:
                             "history-100",
+
                         lastSyncAt:
                             expect.any(Date),
                     }),
@@ -470,15 +709,26 @@ describe("gmail.sync", () => {
             await performInitialSync(
                 gmail,
                 {
-                    id: "account-1",
-                    userId: "user-1",
-                    email: "user@gmail.com",
-                    refreshToken: "refresh",
-                    historyId: null,
+                    id:
+                        "account-1",
+
+                    userId:
+                        "user-1",
+
+                    email:
+                        "user@gmail.com",
+
+                    refreshToken:
+                        "refresh",
+
+                    historyId:
+                        null,
                 } as any,
                 "user-1",
                 {
-                    maxResults: 25,
+                    maxResults:
+                        25,
+
                     pageToken:
                         "page-token",
                 },
@@ -486,10 +736,15 @@ describe("gmail.sync", () => {
 
             expect(list)
                 .toHaveBeenCalledWith({
-                    userId: "me",
+                    userId:
+                        "me",
+
                     q:
                         "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:30d",
-                    maxResults: 25,
+
+                    maxResults:
+                        25,
+
                     pageToken:
                         "page-token",
                 });
@@ -499,13 +754,18 @@ describe("gmail.sync", () => {
 
             mocks.ingestGmailEmail
                 .mockResolvedValueOnce({
-                    status: "created",
+                    status:
+                        "created",
+
                     transactionId:
                         "transaction-1",
                 })
+
                 .mockResolvedValueOnce({
-                    status: "duplicate",
+                    status:
+                        "duplicate",
                 })
+
                 .mockResolvedValueOnce({
                     status:
                         "not-a-transaction",
@@ -514,44 +774,59 @@ describe("gmail.sync", () => {
             const gmail = {
                 users: {
                     messages: {
-                        list: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    messages: [
-                                        {id: "1"},
-                                        {id: "2"},
-                                        {id: "3"},
-                                    ],
-                                },
-                            }),
+                        list:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        messages: [
+                                            {
+                                                id:
+                                                    "1",
+                                            },
 
-                        get: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    payload: {
-                                        headers: [],
-                                        body: {
-                                            data:
-                                                Buffer
-                                                    .from(
-                                                        "test",
-                                                    )
-                                                    .toString(
-                                                        "base64",
-                                                    ),
+                                            {
+                                                id:
+                                                    "2",
+                                            },
+
+                                            {
+                                                id:
+                                                    "3",
+                                            },
+                                        ],
+                                    },
+                                }),
+
+                        get:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        payload: {
+                                            headers: [],
+
+                                            body: {
+                                                data:
+                                                    Buffer
+                                                        .from(
+                                                            "test",
+                                                        )
+                                                        .toString(
+                                                            "base64",
+                                                        ),
+                                            },
                                         },
                                     },
-                                },
-                            }),
+                                }),
                     },
 
-                    getProfile: vi.fn()
-                        .mockResolvedValue({
-                            data: {
-                                historyId:
-                                    "history-1",
-                            },
-                        }),
+                    getProfile:
+                        vi.fn()
+                            .mockResolvedValue({
+                                data: {
+                                    historyId:
+                                        "history-1",
+                                },
+                            }),
                 },
             } as any;
 
@@ -559,12 +834,20 @@ describe("gmail.sync", () => {
                 await performInitialSync(
                     gmail,
                     {
-                        id: "account-1",
-                        userId: "user-1",
-                        email: "user@gmail.com",
+                        id:
+                            "account-1",
+
+                        userId:
+                            "user-1",
+
+                        email:
+                            "user@gmail.com",
+
                         refreshToken:
                             "refresh",
-                        historyId: null,
+
+                        historyId:
+                            null,
                     } as any,
                     "user-1",
                     {},
@@ -574,13 +857,11 @@ describe("gmail.sync", () => {
                 result.transactionsCreated,
             ).toBe(1);
 
-            expect(
-                result.duplicates,
-            ).toBe(1);
+            expect(result.duplicates)
+                .toBe(1);
 
-            expect(
-                result.skipped,
-            ).toBe(1);
+            expect(result.skipped)
+                .toBe(1);
         });
 
         it("throws when Gmail does not return a historyId", async () => {
@@ -588,18 +869,20 @@ describe("gmail.sync", () => {
             const gmail = {
                 users: {
                     messages: {
-                        list: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    messages: [],
-                                },
-                            }),
+                        list:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        messages: [],
+                                    },
+                                }),
                     },
 
-                    getProfile: vi.fn()
-                        .mockResolvedValue({
-                            data: {},
-                        }),
+                    getProfile:
+                        vi.fn()
+                            .mockResolvedValue({
+                                data: {},
+                            }),
                 },
             } as any;
 
@@ -607,12 +890,20 @@ describe("gmail.sync", () => {
                 performInitialSync(
                     gmail,
                     {
-                        id: "account-1",
-                        userId: "user-1",
-                        email: "user@gmail.com",
+                        id:
+                            "account-1",
+
+                        userId:
+                            "user-1",
+
+                        email:
+                            "user@gmail.com",
+
                         refreshToken:
                             "refresh",
-                        historyId: null,
+
+                        historyId:
+                            null,
                     } as any,
                     "user-1",
                     {},
@@ -625,7 +916,6 @@ describe("gmail.sync", () => {
                 mocks.gmailAccountUpdate,
             ).not.toHaveBeenCalled();
         });
-
     });
 
     // ---------------------------------------------------------------------
@@ -633,7 +923,9 @@ describe("gmail.sync", () => {
     // ---------------------------------------------------------------------
 
     describe("performIncrementalSync", () => {
+
         it("stops processing when a message fails and does not advance the checkpoint", async () => {
+
             mocks.ingestGmailEmail
                 .mockRejectedValueOnce(
                     new Error("bad message"),
@@ -642,45 +934,57 @@ describe("gmail.sync", () => {
             const gmail = {
                 users: {
                     history: {
-                        list: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    historyId:
-                                        "history-20",
-                                    history: [
-                                        {
-                                            messagesAdded: [
-                                                {
-                                                    message: {
-                                                        id: "message-1",
+                        list:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        historyId:
+                                            "history-20",
+
+                                        history: [
+                                            {
+                                                messagesAdded: [
+                                                    {
+                                                        message: {
+                                                            id:
+                                                                "message-1",
+                                                        },
                                                     },
-                                                },
-                                                {
-                                                    message: {
-                                                        id: "message-2",
+
+                                                    {
+                                                        message: {
+                                                            id:
+                                                                "message-2",
+                                                        },
                                                     },
-                                                },
-                                            ],
-                                        },
-                                    ],
-                                },
-                            }),
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                }),
                     },
 
                     messages: {
-                        get: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    payload: {
-                                        headers: [],
-                                        body: {
-                                            data: Buffer
-                                                .from("test")
-                                                .toString("base64"),
+                        get:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        payload: {
+                                            headers: [],
+
+                                            body: {
+                                                data:
+                                                    Buffer
+                                                        .from(
+                                                            "test",
+                                                        )
+                                                        .toString(
+                                                            "base64",
+                                                        ),
+                                            },
                                         },
                                     },
-                                },
-                            }),
+                                }),
                     },
                 },
             } as any;
@@ -689,15 +993,26 @@ describe("gmail.sync", () => {
                 performIncrementalSync(
                     gmail,
                     {
-                        id: "account-1",
-                        userId: "user-1",
-                        email: "user@gmail.com",
-                        refreshToken: "refresh",
-                        historyId: "history-10",
+                        id:
+                            "account-1",
+
+                        userId:
+                            "user-1",
+
+                        email:
+                            "user@gmail.com",
+
+                        refreshToken:
+                            "refresh",
+
+                        historyId:
+                            "history-10",
                     } as any,
                     "user-1",
                 ),
-            ).rejects.toThrow("bad message");
+            ).rejects.toThrow(
+                "bad message",
+            );
 
             expect(
                 mocks.ingestGmailEmail,
@@ -713,53 +1028,57 @@ describe("gmail.sync", () => {
             const gmail = {
                 users: {
                     history: {
-                        list: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    historyId:
-                                        "history-20",
+                        list:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        historyId:
+                                            "history-20",
 
-                                    history: [
-                                        {
-                                            messagesAdded: [
-                                                {
-                                                    message: {
-                                                        id:
-                                                            "message-1",
+                                        history: [
+                                            {
+                                                messagesAdded: [
+                                                    {
+                                                        message: {
+                                                            id:
+                                                                "message-1",
+                                                        },
                                                     },
-                                                },
-                                                {
-                                                    message: {
-                                                        id:
-                                                            "message-2",
+
+                                                    {
+                                                        message: {
+                                                            id:
+                                                                "message-2",
+                                                        },
                                                     },
-                                                },
-                                            ],
-                                        },
-                                    ],
-                                },
-                            }),
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                }),
                     },
 
                     messages: {
-                        get: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    payload: {
-                                        headers: [],
-                                        body: {
-                                            data:
-                                                Buffer
-                                                    .from(
-                                                        "transaction",
-                                                    )
-                                                    .toString(
-                                                        "base64",
-                                                    ),
+                        get:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        payload: {
+                                            headers: [],
+
+                                            body: {
+                                                data:
+                                                    Buffer
+                                                        .from(
+                                                            "transaction",
+                                                        )
+                                                        .toString(
+                                                            "base64",
+                                                        ),
+                                            },
                                         },
                                     },
-                                },
-                            }),
+                                }),
                     },
                 },
             } as any;
@@ -768,20 +1087,26 @@ describe("gmail.sync", () => {
                 await performIncrementalSync(
                     gmail,
                     {
-                        id: "account-1",
-                        userId: "user-1",
-                        email: "user@gmail.com",
+                        id:
+                            "account-1",
+
+                        userId:
+                            "user-1",
+
+                        email:
+                            "user@gmail.com",
+
                         refreshToken:
                             "refresh",
+
                         historyId:
                             "history-10",
                     } as any,
                     "user-1",
                 );
 
-            expect(
-                result.fetched,
-            ).toBe(2);
+            expect(result.fetched)
+                .toBe(2);
 
             expect(
                 result.transactionsCreated,
@@ -791,12 +1116,15 @@ describe("gmail.sync", () => {
                 mocks.gmailAccountUpdate,
             ).toHaveBeenCalledWith({
                 where: {
-                    id: "account-1",
+                    id:
+                        "account-1",
                 },
+
                 data:
                     expect.objectContaining({
                         historyId:
                             "history-20",
+
                         lastSyncAt:
                             expect.any(Date),
                     }),
@@ -811,6 +1139,7 @@ describe("gmail.sync", () => {
                         data: {
                             historyId:
                                 "history-200",
+
                             history: [],
                         },
                     });
@@ -818,11 +1147,13 @@ describe("gmail.sync", () => {
             const gmail = {
                 users: {
                     history: {
-                        list: historyList,
+                        list:
+                        historyList,
                     },
 
                     messages: {
-                        get: vi.fn(),
+                        get:
+                            vi.fn(),
                     },
                 },
             } as any;
@@ -830,11 +1161,18 @@ describe("gmail.sync", () => {
             await performIncrementalSync(
                 gmail,
                 {
-                    id: "account-1",
-                    userId: "user-1",
-                    email: "user@gmail.com",
+                    id:
+                        "account-1",
+
+                    userId:
+                        "user-1",
+
+                    email:
+                        "user@gmail.com",
+
                     refreshToken:
                         "refresh",
+
                     historyId:
                         "history-150",
                 } as any,
@@ -843,9 +1181,12 @@ describe("gmail.sync", () => {
 
             expect(historyList)
                 .toHaveBeenCalledWith({
-                    userId: "me",
+                    userId:
+                        "me",
+
                     startHistoryId:
                         "history-150",
+
                     pageToken:
                     undefined,
                 });
@@ -856,18 +1197,21 @@ describe("gmail.sync", () => {
             const gmail = {
                 users: {
                     history: {
-                        list: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    historyId:
-                                        "history-200",
-                                    history: [],
-                                },
-                            }),
+                        list:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        historyId:
+                                            "history-200",
+
+                                        history: [],
+                                    },
+                                }),
                     },
 
                     messages: {
-                        get: vi.fn(),
+                        get:
+                            vi.fn(),
                     },
                 },
             } as any;
@@ -875,11 +1219,18 @@ describe("gmail.sync", () => {
             await performIncrementalSync(
                 gmail,
                 {
-                    id: "account-1",
-                    userId: "user-1",
-                    email: "user@gmail.com",
+                    id:
+                        "account-1",
+
+                    userId:
+                        "user-1",
+
+                    email:
+                        "user@gmail.com",
+
                     refreshToken:
                         "refresh",
+
                     historyId:
                         "history-150",
                 } as any,
@@ -890,12 +1241,15 @@ describe("gmail.sync", () => {
                 mocks.gmailAccountUpdate,
             ).toHaveBeenCalledWith({
                 where: {
-                    id: "account-1",
+                    id:
+                        "account-1",
                 },
+
                 data:
                     expect.objectContaining({
                         historyId:
                             "history-200",
+
                         lastSyncAt:
                             expect.any(Date),
                     }),
@@ -907,29 +1261,32 @@ describe("gmail.sync", () => {
             const gmail = {
                 users: {
                     history: {
-                        list: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    historyId:
-                                        "history-200",
-                                    history: [
-                                        {
-                                            messagesDeleted: [
-                                                {
-                                                    message: {
-                                                        id:
-                                                            "deleted-1",
+                        list:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        historyId:
+                                            "history-200",
+
+                                        history: [
+                                            {
+                                                messagesDeleted: [
+                                                    {
+                                                        message: {
+                                                            id:
+                                                                "deleted-1",
+                                                        },
                                                     },
-                                                },
-                                            ],
-                                        },
-                                    ],
-                                },
-                            }),
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                }),
                     },
 
                     messages: {
-                        get: vi.fn(),
+                        get:
+                            vi.fn(),
                     },
                 },
             } as any;
@@ -938,20 +1295,26 @@ describe("gmail.sync", () => {
                 await performIncrementalSync(
                     gmail,
                     {
-                        id: "account-1",
-                        userId: "user-1",
-                        email: "user@gmail.com",
+                        id:
+                            "account-1",
+
+                        userId:
+                            "user-1",
+
+                        email:
+                            "user@gmail.com",
+
                         refreshToken:
                             "refresh",
+
                         historyId:
                             "history-150",
                     } as any,
                     "user-1",
                 );
 
-            expect(
-                result.fetched,
-            ).toBe(0);
+            expect(result.fetched)
+                .toBe(0);
 
             expect(
                 mocks.ingestGmailEmail,
@@ -967,57 +1330,61 @@ describe("gmail.sync", () => {
             const gmail = {
                 users: {
                     history: {
-                        list: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    historyId:
-                                        "history-20",
+                        list:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        historyId:
+                                            "history-20",
 
-                                    history: [
-                                        {
-                                            messagesAdded: [
-                                                {
-                                                    message: {
-                                                        id:
-                                                            "same",
+                                        history: [
+                                            {
+                                                messagesAdded: [
+                                                    {
+                                                        message: {
+                                                            id:
+                                                                "same",
+                                                        },
                                                     },
-                                                },
-                                            ],
-                                        },
-                                        {
-                                            messagesAdded: [
-                                                {
-                                                    message: {
-                                                        id:
-                                                            "same",
+                                                ],
+                                            },
+
+                                            {
+                                                messagesAdded: [
+                                                    {
+                                                        message: {
+                                                            id:
+                                                                "same",
+                                                        },
                                                     },
-                                                },
-                                            ],
-                                        },
-                                    ],
-                                },
-                            }),
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                }),
                     },
 
                     messages: {
-                        get: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    payload: {
-                                        headers: [],
-                                        body: {
-                                            data:
-                                                Buffer
-                                                    .from(
-                                                        "test",
-                                                    )
-                                                    .toString(
-                                                        "base64",
-                                                    ),
+                        get:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        payload: {
+                                            headers: [],
+
+                                            body: {
+                                                data:
+                                                    Buffer
+                                                        .from(
+                                                            "test",
+                                                        )
+                                                        .toString(
+                                                            "base64",
+                                                        ),
+                                            },
                                         },
                                     },
-                                },
-                            }),
+                                }),
                     },
                 },
             } as any;
@@ -1026,20 +1393,26 @@ describe("gmail.sync", () => {
                 await performIncrementalSync(
                     gmail,
                     {
-                        id: "account-1",
-                        userId: "user-1",
-                        email: "user@gmail.com",
+                        id:
+                            "account-1",
+
+                        userId:
+                            "user-1",
+
+                        email:
+                            "user@gmail.com",
+
                         refreshToken:
                             "refresh",
+
                         historyId:
                             "history-10",
                     } as any,
                     "user-1",
                 );
 
-            expect(
-                result.fetched,
-            ).toBe(1);
+            expect(result.fetched)
+                .toBe(1);
 
             expect(
                 mocks.ingestGmailEmail,
@@ -1050,6 +1423,7 @@ describe("gmail.sync", () => {
 
             const historyList =
                 vi.fn()
+
                     .mockResolvedValueOnce({
                         data: {
                             historyId:
@@ -1072,6 +1446,7 @@ describe("gmail.sync", () => {
                                 "page-2",
                         },
                     })
+
                     .mockResolvedValueOnce({
                         data: {
                             historyId:
@@ -1095,28 +1470,31 @@ describe("gmail.sync", () => {
             const gmail = {
                 users: {
                     history: {
-                        list: historyList,
+                        list:
+                        historyList,
                     },
 
                     messages: {
-                        get: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    payload: {
-                                        headers: [],
-                                        body: {
-                                            data:
-                                                Buffer
-                                                    .from(
-                                                        "transaction",
-                                                    )
-                                                    .toString(
-                                                        "base64",
-                                                    ),
+                        get:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        payload: {
+                                            headers: [],
+
+                                            body: {
+                                                data:
+                                                    Buffer
+                                                        .from(
+                                                            "transaction",
+                                                        )
+                                                        .toString(
+                                                            "base64",
+                                                        ),
+                                            },
                                         },
                                     },
-                                },
-                            }),
+                                }),
                     },
                 },
             } as any;
@@ -1125,57 +1503,68 @@ describe("gmail.sync", () => {
                 await performIncrementalSync(
                     gmail,
                     {
-                        id: "account-1",
-                        userId: "user-1",
-                        email: "user@gmail.com",
+                        id:
+                            "account-1",
+
+                        userId:
+                            "user-1",
+
+                        email:
+                            "user@gmail.com",
+
                         refreshToken:
                             "refresh",
+
                         historyId:
                             "history-10",
                     } as any,
                     "user-1",
                 );
 
-            expect(
-                result.fetched,
-            ).toBe(2);
+            expect(result.fetched)
+                .toBe(2);
 
-            expect(
-                historyList,
-            ).toHaveBeenCalledTimes(2);
+            expect(historyList)
+                .toHaveBeenCalledTimes(2);
 
-            expect(
-                historyList,
-            ).toHaveBeenNthCalledWith(
-                1,
-                {
-                    userId: "me",
-                    startHistoryId:
-                        "history-10",
-                    pageToken:
-                    undefined,
-                },
-            );
+            expect(historyList)
+                .toHaveBeenNthCalledWith(
+                    1,
+                    {
+                        userId:
+                            "me",
 
-            expect(
-                historyList,
-            ).toHaveBeenNthCalledWith(
-                2,
-                {
-                    userId: "me",
-                    startHistoryId:
-                        "history-10",
-                    pageToken:
-                        "page-2",
-                },
-            );
+                        startHistoryId:
+                            "history-10",
+
+                        pageToken:
+                        undefined,
+                    },
+                );
+
+            expect(historyList)
+                .toHaveBeenNthCalledWith(
+                    2,
+                    {
+                        userId:
+                            "me",
+
+                        startHistoryId:
+                            "history-10",
+
+                        pageToken:
+                            "page-2",
+                    },
+                );
 
             expect(
                 mocks.gmailAccountUpdate,
             ).toHaveBeenCalledWith({
                 where: {
-                    id: "account-1",
+                    id:
+                        "account-1",
                 },
+
                 data:
                     expect.objectContaining({
                         historyId:
@@ -1195,47 +1584,50 @@ describe("gmail.sync", () => {
             const gmail = {
                 users: {
                     history: {
-                        list: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    historyId:
-                                        "history-20",
+                        list:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        historyId:
+                                            "history-20",
 
-                                    history: [
-                                        {
-                                            messagesAdded: [
-                                                {
-                                                    message: {
-                                                        id:
-                                                            "message-1",
+                                        history: [
+                                            {
+                                                messagesAdded: [
+                                                    {
+                                                        message: {
+                                                            id:
+                                                                "message-1",
+                                                        },
                                                     },
-                                                },
-                                            ],
-                                        },
-                                    ],
-                                },
-                            }),
+                                                ],
+                                            },
+                                        ],
+                                    },
+                                }),
                     },
 
                     messages: {
-                        get: vi.fn()
-                            .mockResolvedValue({
-                                data: {
-                                    payload: {
-                                        headers: [],
-                                        body: {
-                                            data:
-                                                Buffer
-                                                    .from(
-                                                        "test",
-                                                    )
-                                                    .toString(
-                                                        "base64",
-                                                    ),
+                        get:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        payload: {
+                                            headers: [],
+
+                                            body: {
+                                                data:
+                                                    Buffer
+                                                        .from(
+                                                            "test",
+                                                        )
+                                                        .toString(
+                                                            "base64",
+                                                        ),
+                                            },
                                         },
                                     },
-                                },
-                            }),
+                                }),
                     },
                 },
             } as any;
@@ -1244,11 +1636,18 @@ describe("gmail.sync", () => {
                 await performIncrementalSync(
                     gmail,
                     {
-                        id: "account-1",
-                        userId: "user-1",
-                        email: "user@gmail.com",
+                        id:
+                            "account-1",
+
+                        userId:
+                            "user-1",
+
+                        email:
+                            "user@gmail.com",
+
                         refreshToken:
                             "refresh",
+
                         historyId:
                             "history-10",
                     } as any,
@@ -1259,9 +1658,8 @@ describe("gmail.sync", () => {
                 result.transactionsCreated,
             ).toBe(0);
 
-            expect(
-                result.duplicates,
-            ).toBe(1);
+            expect(result.duplicates)
+                .toBe(1);
         });
 
         it("rejects when historyId is missing", async () => {
@@ -1270,12 +1668,20 @@ describe("gmail.sync", () => {
                 performIncrementalSync(
                     {} as any,
                     {
-                        id: "account-1",
-                        userId: "user-1",
-                        email: "user@gmail.com",
+                        id:
+                            "account-1",
+
+                        userId:
+                            "user-1",
+
+                        email:
+                            "user@gmail.com",
+
                         refreshToken:
                             "refresh",
-                        historyId: null,
+
+                        historyId:
+                            null,
                     } as any,
                     "user-1",
                 ),
@@ -1289,10 +1695,12 @@ describe("gmail.sync", () => {
             const gmail = {
                 users: {
                     history: {
-                        list: vi.fn()
-                            .mockRejectedValue({
-                                code: 404,
-                            }),
+                        list:
+                            vi.fn()
+                                .mockRejectedValue({
+                                    code:
+                                        404,
+                                }),
                     },
                 },
             } as any;
@@ -1301,11 +1709,18 @@ describe("gmail.sync", () => {
                 performIncrementalSync(
                     gmail,
                     {
-                        id: "account-1",
-                        userId: "user-1",
-                        email: "user@gmail.com",
+                        id:
+                            "account-1",
+
+                        userId:
+                            "user-1",
+
+                        email:
+                            "user@gmail.com",
+
                         refreshToken:
                             "refresh",
+
                         historyId:
                             "history-10",
                     } as any,
@@ -1315,113 +1730,187 @@ describe("gmail.sync", () => {
                 "Gmail history expired",
             );
         });
+
         it("skips deleted Gmail messages and advances the incremental checkpoint", async () => {
-            const messagesGet = vi
-                .fn()
-                .mockRejectedValueOnce({
-                    code: 404,
-                    response: {
-                        status: 404,
-                    },
-                    message: "Requested entity was not found.",
-                })
-                .mockResolvedValueOnce({
-                    data: {
-                        id: "message-2",
-                        internalDate: "1788714000000",
-                        payload: {
-                            headers: [
-                                {
-                                    name: "From",
-                                    value: "alerts@axis.bank.in",
+
+            const messagesGet =
+                vi.fn()
+
+                    .mockRejectedValueOnce({
+                        code:
+                            404,
+
+                        response: {
+                            status:
+                                404,
+                        },
+
+                        message:
+                            "Requested entity was not found.",
+                    })
+
+                    .mockResolvedValueOnce({
+                        data: {
+                            id:
+                                "message-2",
+
+                            internalDate:
+                                "1788714000000",
+
+                            payload: {
+                                headers: [
+                                    {
+                                        name:
+                                            "From",
+
+                                        value:
+                                            "alerts@axis.bank.in",
+                                    },
+
+                                    {
+                                        name:
+                                            "Subject",
+
+                                        value:
+                                            "Transaction alert",
+                                    },
+                                ],
+
+                                body: {
+                                    data:
+                                        Buffer
+                                            .from(
+                                                "transaction email body",
+                                            )
+                                            .toString(
+                                                "base64",
+                                            ),
                                 },
-                                {
-                                    name: "Subject",
-                                    value: "Transaction alert",
-                                },
-                            ],
-                            body: {
-                                data: Buffer.from(
-                                    "transaction email body",
-                                ).toString("base64"),
                             },
                         },
-                    },
-                });
+                    });
 
             const gmail = {
                 users: {
                     messages: {
-                        get: messagesGet,
+                        get:
+                        messagesGet,
                     },
+
                     history: {
-                        list: vi.fn().mockResolvedValue({
-                            data: {
-                                historyId: "4872552",
-                                history: [
-                                    {
-                                        messagesAdded: [
+                        list:
+                            vi.fn()
+                                .mockResolvedValue({
+                                    data: {
+                                        historyId:
+                                            "4872552",
+
+                                        history: [
                                             {
-                                                message: {
-                                                    id: "deleted-message",
-                                                },
-                                            },
-                                            {
-                                                message: {
-                                                    id: "message-2",
-                                                },
+                                                messagesAdded: [
+                                                    {
+                                                        message: {
+                                                            id:
+                                                                "deleted-message",
+                                                        },
+                                                    },
+
+                                                    {
+                                                        message: {
+                                                            id:
+                                                                "message-2",
+                                                        },
+                                                    },
+                                                ],
                                             },
                                         ],
+
+                                        nextPageToken:
+                                            null,
                                     },
-                                ],
-                                nextPageToken: null,
-                            },
-                        }),
+                                }),
                     },
                 },
             } as any;
 
-            mocks.ingestGmailEmail.mockResolvedValue({
-                status: "created",
-                transactionId: "transaction-2",
-            });
+            mocks.ingestGmailEmail
+                .mockResolvedValue({
+                    status:
+                        "created",
 
-            const result = await performIncrementalSync(
-                gmail,
-                {
-                    id: "gmail-account-1",
-                    userId: "user-1",
-                    email: "test@gmail.com",
-                    refreshToken: "refresh-token",
-                    historyId: "4870848",
-                } as any,
-                "user-1",
-            );
+                    transactionId:
+                        "transaction-2",
+                });
 
-            expect(messagesGet).toHaveBeenCalledTimes(2);
+            const result =
+                await performIncrementalSync(
+                    gmail,
+                    {
+                        id:
+                            "gmail-account-1",
 
-            expect(mocks.ingestGmailEmail).toHaveBeenCalledTimes(1);
-            expect(mocks.ingestGmailEmail).toHaveBeenCalledWith(
+                        userId:
+                            "user-1",
+
+                        email:
+                            "test@gmail.com",
+
+                        refreshToken:
+                            "refresh-token",
+
+                        historyId:
+                            "4870848",
+                    } as any,
+                    "user-1",
+                );
+
+            expect(messagesGet)
+                .toHaveBeenCalledTimes(2);
+
+            expect(
+                mocks.ingestGmailEmail,
+            ).toHaveBeenCalledTimes(1);
+
+            expect(
+                mocks.ingestGmailEmail,
+            ).toHaveBeenCalledWith(
                 expect.objectContaining({
-                    gmailMessageId: "message-2",
+                    gmailMessageId:
+                        "message-2",
                 }),
             );
 
             expect(result).toMatchObject({
-                fetched: 2,
-                transactionsCreated: 1,
-                duplicates: 0,
-                skipped: 1,
-                nextPageToken: null,
+                fetched:
+                    2,
+
+                transactionsCreated:
+                    1,
+
+                duplicates:
+                    0,
+
+                skipped:
+                    1,
+
+                nextPageToken:
+                    null,
             });
 
-            expect(mocks.gmailAccountUpdate).toHaveBeenCalledWith({
+            expect(
+                mocks.gmailAccountUpdate,
+            ).toHaveBeenCalledWith({
                 where: {
-                    id: "gmail-account-1",
+                    id:
+                        "gmail-account-1",
                 },
+
                 data: {
-                    historyId: "4872552",
-                    lastSyncAt: expect.any(Date),
+                    historyId:
+                        "4872552",
+
+                    lastSyncAt:
+                        expect.any(Date),
                 },
             });
         });
@@ -1432,19 +1921,23 @@ describe("gmail.sync", () => {
     // ---------------------------------------------------------------------
 
     describe("syncMailbox", () => {
+
         it("performs an initial sync when historyId is missing", async () => {
+
             mocks.createGmailClient
                 .mockReturnValue({
                     users: {
                         messages: {
-                            list: vi.fn()
-                                .mockResolvedValue({
-                                    data: {
-                                        messages: [],
-                                    },
-                                }),
+                            list:
+                                vi.fn()
+                                    .mockResolvedValue({
+                                        data: {
+                                            messages: [],
+                                        },
+                                    }),
 
-                            get: vi.fn(),
+                            get:
+                                vi.fn(),
                         },
 
                         getProfile:
@@ -1464,9 +1957,8 @@ describe("gmail.sync", () => {
                     {},
                 );
 
-            expect(
-                result.fetched,
-            ).toBe(0);
+            expect(result.fetched)
+                .toBe(0);
 
             expect(
                 mocks.createGmailClient,
@@ -1479,11 +1971,18 @@ describe("gmail.sync", () => {
 
             mocks.getConnectedGmailAccount
                 .mockResolvedValue({
-                    id: "gmail-account-1",
-                    userId: "user-1",
-                    email: "user@gmail.com",
+                    id:
+                        "gmail-account-1",
+
+                    userId:
+                        "user-1",
+
+                    email:
+                        "user@gmail.com",
+
                     refreshToken:
                         "refresh-token",
+
                     historyId:
                         "history-100",
                 });
@@ -1494,6 +1993,7 @@ describe("gmail.sync", () => {
                         data: {
                             historyId:
                                 "history-110",
+
                             history: [],
                         },
                     });
@@ -1507,7 +2007,8 @@ describe("gmail.sync", () => {
                         },
 
                         messages: {
-                            get: vi.fn(),
+                            get:
+                                vi.fn(),
                         },
                     },
                 });
@@ -1518,30 +2019,38 @@ describe("gmail.sync", () => {
                     {},
                 );
 
-            expect(
-                result.fetched,
-            ).toBe(0);
+            expect(result.fetched)
+                .toBe(0);
 
-            expect(
-                historyList,
-            ).toHaveBeenCalledWith({
-                userId: "me",
-                startHistoryId:
-                    "history-100",
-                pageToken:
-                undefined,
-            });
+            expect(historyList)
+                .toHaveBeenCalledWith({
+                    userId:
+                        "me",
+
+                    startHistoryId:
+                        "history-100",
+
+                    pageToken:
+                    undefined,
+                });
         });
 
         it("falls back to initial sync when history has expired", async () => {
 
             mocks.getConnectedGmailAccount
                 .mockResolvedValue({
-                    id: "gmail-account-1",
-                    userId: "user-1",
-                    email: "user@gmail.com",
+                    id:
+                        "gmail-account-1",
+
+                    userId:
+                        "user-1",
+
+                    email:
+                        "user@gmail.com",
+
                     refreshToken:
                         "refresh-token",
+
                     historyId:
                         "history-expired",
                 });
@@ -1549,7 +2058,8 @@ describe("gmail.sync", () => {
             const historyList =
                 vi.fn()
                     .mockRejectedValue({
-                        code: 404,
+                        code:
+                            404,
                     });
 
             const messagesList =
@@ -1580,6 +2090,7 @@ describe("gmail.sync", () => {
                         messages: {
                             list:
                             messagesList,
+
                             get:
                                 vi.fn(),
                         },
@@ -1594,28 +2105,26 @@ describe("gmail.sync", () => {
                     {},
                 );
 
-            expect(
-                result.fetched,
-            ).toBe(0);
+            expect(result.fetched)
+                .toBe(0);
 
-            expect(
-                historyList,
-            ).toHaveBeenCalledTimes(1);
+            expect(historyList)
+                .toHaveBeenCalledTimes(1);
 
-            expect(
-                messagesList,
-            ).toHaveBeenCalledTimes(1);
+            expect(messagesList)
+                .toHaveBeenCalledTimes(1);
 
-            expect(
-                getProfile,
-            ).toHaveBeenCalledTimes(1);
+            expect(getProfile)
+                .toHaveBeenCalledTimes(1);
 
             expect(
                 mocks.gmailAccountUpdate,
             ).toHaveBeenCalledWith({
                 where: {
-                    id: "gmail-account-1",
+                    id:
+                        "gmail-account-1",
                 },
+
                 data:
                     expect.objectContaining({
                         historyId:
@@ -1636,12 +2145,16 @@ describe("gmail.sync", () => {
                                         resolve({
                                             id:
                                                 "account-1",
+
                                             userId:
                                                 "user-1",
+
                                             email:
                                                 "user@gmail.com",
+
                                             refreshToken:
                                                 "refresh",
+
                                             historyId:
                                                 null,
                                         }),
@@ -1654,12 +2167,13 @@ describe("gmail.sync", () => {
                 .mockReturnValue({
                     users: {
                         messages: {
-                            list: vi.fn()
-                                .mockResolvedValue({
-                                    data: {
-                                        messages: [],
-                                    },
-                                }),
+                            list:
+                                vi.fn()
+                                    .mockResolvedValue({
+                                        data: {
+                                            messages: [],
+                                        },
+                                    }),
 
                             get:
                                 vi.fn(),
@@ -1689,11 +2203,18 @@ describe("gmail.sync", () => {
                 );
 
             expect(second).toMatchObject({
-                fetched: 0,
+                fetched:
+                    0,
+
                 transactionsCreated:
                     0,
-                duplicates: 0,
-                skipped: 0,
+
+                duplicates:
+                    0,
+
+                skipped:
+                    0,
+
                 nextPageToken:
                     null,
             });
@@ -1705,24 +2226,33 @@ describe("gmail.sync", () => {
 
             mocks.getConnectedGmailAccount
                 .mockResolvedValue({
-                    id: "account-1",
-                    userId: "user-1",
-                    email: "user@gmail.com",
+                    id:
+                        "account-1",
+
+                    userId:
+                        "user-1",
+
+                    email:
+                        "user@gmail.com",
+
                     refreshToken:
                         "my-refresh-token",
-                    historyId: null,
+
+                    historyId:
+                        null,
                 });
 
             mocks.createGmailClient
                 .mockReturnValue({
                     users: {
                         messages: {
-                            list: vi.fn()
-                                .mockResolvedValue({
-                                    data: {
-                                        messages: [],
-                                    },
-                                }),
+                            list:
+                                vi.fn()
+                                    .mockResolvedValue({
+                                        data: {
+                                            messages: [],
+                                        },
+                                    }),
                         },
 
                         getProfile:
@@ -1747,36 +2277,52 @@ describe("gmail.sync", () => {
                 "my-refresh-token",
             );
         });
+
         it("deletes the Gmail account and requires reconnect when authorization is revoked", async () => {
+
             mocks.getConnectedGmailAccount
                 .mockResolvedValue({
-                    id: "gmail-account-1",
-                    userId: "user-1",
-                    email: "user@gmail.com",
-                    refreshToken: "refresh-token",
-                    historyId: "history-123",
+                    id:
+                        "gmail-account-1",
+
+                    userId:
+                        "user-1",
+
+                    email:
+                        "user@gmail.com",
+
+                    refreshToken:
+                        "refresh-token",
+
+                    historyId:
+                        "history-123",
                 });
 
-            const historyList = vi.fn()
-                .mockRejectedValue(
-                    createGmailAuthError(),
-                );
+            const historyList =
+                vi.fn()
+                    .mockRejectedValue(
+                        createGmailAuthError(),
+                    );
 
             mocks.createGmailClient
                 .mockReturnValue({
                     users: {
                         history: {
-                            list: historyList,
+                            list:
+                            historyList,
                         },
 
                         messages: {
-                            get: vi.fn(),
+                            get:
+                                vi.fn(),
                         },
                     },
                 });
 
             await expect(
-                syncMailbox("user-1"),
+                syncMailbox(
+                    "user-1",
+                ),
             ).rejects.toThrow(
                 GmailReconnectRequiredError,
             );
@@ -1785,57 +2331,115 @@ describe("gmail.sync", () => {
                 mocks.gmailAccountDelete,
             ).toHaveBeenCalledWith({
                 where: {
-                    id: "gmail-account-1",
+                    id:
+                        "gmail-account-1",
+                },
+            });
+
+            expect(
+                mocks.userUpdate,
+            ).toHaveBeenCalledWith({
+                where: {
+                    id:
+                        "user-1",
+                },
+
+                data: {
+                    gmailLastSyncAt:
+                        expect.any(Date),
                 },
             });
         });
     });
 
+    // ---------------------------------------------------------------------
+    // Gmail reconnect flow
+    // ---------------------------------------------------------------------
+
     describe("Gmail reconnect flow", () => {
-        it("imports missed transactions after Gmail is reconnected", async () => {
-            mocks.getConnectedGmailAccount
-                .mockResolvedValue({
-                    id: "gmail-account-2",
-                    userId: "user-1",
-                    email: "user@gmail.com",
-                    refreshToken: "new-refresh-token",
-                    historyId: null,
-                });
 
-            const messagesList = vi.fn()
-                .mockResolvedValue({
-                    data: {
-                        messages: [
-                            {id: "missed-transaction-1"},
-                            {id: "missed-transaction-2"},
-                        ],
-                    },
-                });
+        it("imports missed transactions using the user's last Gmail sync time", async () => {
 
-            const messagesGet = vi.fn()
-                .mockImplementation(
-                    async ({
-                               id,
-                           }: {
-                        id: string;
-                    }) => ({
-                        data: createGmailMessage({id}),
-                    }),
+            const lastSyncAt =
+                new Date(
+                    "2026-09-01T10:00:00.000Z",
                 );
 
-            const getProfile = vi.fn()
+            mocks.userFindUnique
                 .mockResolvedValue({
-                    data: {
-                        historyId: "history-after-reconnect",
-                    },
+                    gmailLastSyncAt:
+                    lastSyncAt,
                 });
+
+            mocks.getConnectedGmailAccount
+                .mockResolvedValue({
+                    id:
+                        "gmail-account-2",
+
+                    userId:
+                        "user-1",
+
+                    email:
+                        "user@gmail.com",
+
+                    refreshToken:
+                        "new-refresh-token",
+
+                    historyId:
+                        null,
+                });
+
+            const messagesList =
+                vi.fn()
+                    .mockResolvedValue({
+                        data: {
+                            messages: [
+                                {
+                                    id:
+                                        "missed-transaction-1",
+                                },
+
+                                {
+                                    id:
+                                        "missed-transaction-2",
+                                },
+                            ],
+                        },
+                    });
+
+            const messagesGet =
+                vi.fn()
+                    .mockImplementation(
+                        async ({
+                                   id,
+                               }: {
+                            id: string;
+                        }) => ({
+                            data:
+                                createGmailMessage({
+                                    id,
+                                }),
+                        }),
+                    );
+
+            const getProfile =
+                vi.fn()
+                    .mockResolvedValue({
+                        data: {
+                            historyId:
+                                "history-after-reconnect",
+                        },
+                    });
 
             mocks.createGmailClient
                 .mockReturnValue({
                     users: {
                         messages: {
-                            list: messagesList,
-                            get: messagesGet,
+                            list:
+                            messagesList,
+
+                            get:
+                            messagesGet,
                         },
 
                         getProfile,
@@ -1844,26 +2448,62 @@ describe("gmail.sync", () => {
 
             mocks.ingestGmailEmail
                 .mockResolvedValueOnce({
-                    status: "created",
-                    transactionId: "transaction-1",
+                    status:
+                        "created",
+
+                    transactionId:
+                        "transaction-1",
                 })
+
                 .mockResolvedValueOnce({
-                    status: "created",
-                    transactionId: "transaction-2",
+                    status:
+                        "created",
+
+                    transactionId:
+                        "transaction-2",
                 });
 
-            const result = await syncMailbox(
-                "user-1",
+            const result =
+                await syncMailbox(
+                    "user-1",
+                );
+
+            // The reconnect must read the user's
+            // persistent sync checkpoint.
+            expect(
+                mocks.userFindUnique,
+            ).toHaveBeenCalledWith({
+                where: {
+                    id:
+                        "user-1",
+                },
+
+                select: {
+                    gmailLastSyncAt:
+                        true,
+                },
+            });
+
+            // The stored checkpoint must be passed
+            // into the Gmail query builder.
+            expect(
+                mocks.buildGmailQuery,
+            ).toHaveBeenCalledWith(
+                lastSyncAt,
             );
 
-            expect(messagesList)
-                .toHaveBeenCalledWith({
-                    userId: "me",
-                    q:
-                        "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:30d",
-                    maxResults: 50,
-                    pageToken: undefined,
-                });
+            expect(
+                messagesList,
+            ).toHaveBeenCalledWith({
+                userId: "me",
+                q: `{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} after:${Math.floor(
+                    new Date(
+                        "2026-08-31T10:00:00.000Z",
+                    ).getTime() / 1000,
+                )}`,
+                maxResults: 50,
+                pageToken: undefined,
+            });
 
             expect(messagesGet)
                 .toHaveBeenCalledTimes(2);
@@ -1877,7 +2517,9 @@ describe("gmail.sync", () => {
             ).toHaveBeenNthCalledWith(
                 1,
                 expect.objectContaining({
-                    userId: "user-1",
+                    userId:
+                        "user-1",
+
                     gmailMessageId:
                         "missed-transaction-1",
                 }),
@@ -1888,7 +2530,9 @@ describe("gmail.sync", () => {
             ).toHaveBeenNthCalledWith(
                 2,
                 expect.objectContaining({
-                    userId: "user-1",
+                    userId:
+                        "user-1",
+
                     gmailMessageId:
                         "missed-transaction-2",
                 }),
@@ -1896,10 +2540,17 @@ describe("gmail.sync", () => {
 
             expect(result).toEqual(
                 expect.objectContaining({
-                    fetched: 2,
-                    transactionsCreated: 2,
-                    duplicates: 0,
-                    skipped: 0,
+                    fetched:
+                        2,
+
+                    transactionsCreated:
+                        2,
+
+                    duplicates:
+                        0,
+
+                    skipped:
+                        0,
                 }),
             );
 
@@ -1907,144 +2558,18 @@ describe("gmail.sync", () => {
                 mocks.gmailAccountUpdate,
             ).toHaveBeenCalledWith({
                 where: {
-                    id: "gmail-account-2",
+                    id:
+                        "gmail-account-2",
                 },
-                data: expect.objectContaining({
-                    historyId:
-                        "history-after-reconnect",
-                    lastSyncAt:
-                        expect.any(Date),
-                }),
-            });
-        });
-        it("imports missed transactions after Gmail is reconnected", async () => {
-            mocks.getConnectedGmailAccount
-                .mockResolvedValue({
-                    id: "gmail-account-2",
-                    userId: "user-1",
-                    email: "user@gmail.com",
-                    refreshToken: "new-refresh-token",
-                    historyId: null,
-                });
 
-            const messagesList = vi.fn()
-                .mockResolvedValue({
-                    data: {
-                        messages: [
-                            {
-                                id: "missed-transaction-1",
-                            },
-                            {
-                                id: "missed-transaction-2",
-                            },
-                        ],
-                    },
-                });
-
-            const messagesGet = vi.fn()
-                .mockImplementation(
-                    async ({
-                               id,
-                           }: {
-                        id: string;
-                    }) => ({
-                        data: createGmailMessage({id}),
-                    }),
-                );
-
-            const getProfile = vi.fn()
-                .mockResolvedValue({
-                    data: {
+                data:
+                    expect.objectContaining({
                         historyId:
                             "history-after-reconnect",
-                    },
-                });
 
-            mocks.createGmailClient
-                .mockReturnValue({
-                    users: {
-                        messages: {
-                            list: messagesList,
-                            get: messagesGet,
-                        },
-
-                        getProfile,
-                    },
-                });
-
-            mocks.ingestGmailEmail
-                .mockResolvedValueOnce({
-                    status: "created",
-                    transactionId: "transaction-1",
-                })
-                .mockResolvedValueOnce({
-                    status: "created",
-                    transactionId: "transaction-2",
-                });
-
-            const result = await syncMailbox(
-                "user-1",
-            );
-
-            expect(messagesList)
-                .toHaveBeenCalledWith({
-                    userId: "me",
-                    q:
-                        "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:30d",
-                    maxResults: 50,
-                    pageToken: undefined,
-                });
-
-            expect(messagesGet)
-                .toHaveBeenCalledTimes(2);
-
-            expect(
-                mocks.ingestGmailEmail,
-            ).toHaveBeenCalledTimes(2);
-
-            expect(
-                mocks.ingestGmailEmail,
-            ).toHaveBeenNthCalledWith(
-                1,
-                expect.objectContaining({
-                    userId: "user-1",
-                    gmailMessageId:
-                        "missed-transaction-1",
-                }),
-            );
-
-            expect(
-                mocks.ingestGmailEmail,
-            ).toHaveBeenNthCalledWith(
-                2,
-                expect.objectContaining({
-                    userId: "user-1",
-                    gmailMessageId:
-                        "missed-transaction-2",
-                }),
-            );
-
-            expect(result).toEqual(
-                expect.objectContaining({
-                    fetched: 2,
-                    transactionsCreated: 2,
-                    duplicates: 0,
-                    skipped: 0,
-                }),
-            );
-
-            expect(
-                mocks.gmailAccountUpdate,
-            ).toHaveBeenCalledWith({
-                where: {
-                    id: "gmail-account-2",
-                },
-                data: expect.objectContaining({
-                    historyId:
-                        "history-after-reconnect",
-                    lastSyncAt:
-                        expect.any(Date),
-                }),
+                        lastSyncAt:
+                            expect.any(Date),
+                    }),
             });
         });
     });

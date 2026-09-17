@@ -30,19 +30,32 @@ export const parseAxisAccountDebit = ({
             ],
         );
 
+
     if (amount === null) {
         return null;
     }
 
+
     const merchant =
-        extractAxisTransactionInfo(body);
+        extractAxisTransactionInfo(
+            body,
+        );
+
 
     return {
+
         amount,
 
         type:
         TransactionType.EXPENSE,
 
+        /*
+         * The extractor has already removed UPI/P2A/P2M
+         * payment references and unsafe transaction artifacts.
+         *
+         * If no safe merchant can be extracted, keep it
+         * undefined rather than creating an "Unknown" merchant.
+         */
         merchant:
             merchant ?? undefined,
 
@@ -78,14 +91,20 @@ export const parseAxisAccountCredit = ({
             ],
         );
 
+
     if (amount === null) {
         return null;
     }
 
+
     const merchant =
-        extractAxisTransactionInfo(body);
+        extractAxisTransactionInfo(
+            body,
+        );
+
 
     return {
+
         amount,
 
         type:
@@ -126,14 +145,20 @@ export const parseAxisCreditCard = ({
             ],
         );
 
+
     if (amount === null) {
         return null;
     }
 
+
     const merchant =
-        extractAxisCreditCardMerchant(body);
+        extractAxisCreditCardMerchant(
+            body,
+        );
+
 
     return {
+
         amount,
 
         type:
@@ -174,14 +199,20 @@ export const parseAxisBurgundyDebit = ({
             ],
         );
 
+
     if (amount === null) {
         return null;
     }
 
+
     const merchant =
-        extractAxisBurgundyCounterparty(body);
+        extractAxisBurgundyCounterparty(
+            body,
+        );
+
 
     return {
+
         amount,
 
         type:
@@ -222,14 +253,20 @@ export const parseAxisBurgundyCredit = ({
             ],
         );
 
+
     if (amount === null) {
         return null;
     }
 
+
     const merchant =
-        extractAxisBurgundyCounterparty(body);
+        extractAxisBurgundyCounterparty(
+            body,
+        );
+
 
     return {
+
         amount,
 
         type:

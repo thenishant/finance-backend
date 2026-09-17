@@ -1,7 +1,16 @@
 import {FinancialAccountType, TransactionType,} from "@prisma/client";
+
 import {z} from "zod";
 
+
+/*
+ * --------------------------------------------------------------------------
+ * Create transaction
+ * --------------------------------------------------------------------------
+ */
+
 export const createTransactionSchema = z.object({
+
     type: z.enum([
         TransactionType.EXPENSE,
         TransactionType.INCOME,
@@ -9,26 +18,114 @@ export const createTransactionSchema = z.object({
         TransactionType.INVESTMENT,
     ]),
 
-    amount: z.coerce.number().positive(),
+    amount:
+        z.coerce
+            .number()
+            .positive(),
 
-    date: z.string(),
+    date:
+        z.string(),
 
-    categoryId: z.string().optional(),
+    categoryId:
+        z.string()
+            .optional(),
 
-    sourceAccountId: z.string().optional(),
+    sourceAccountId:
+        z.string()
+            .optional(),
 
-    destinationAccountId: z.string().optional(),
+    destinationAccountId:
+        z.string()
+            .optional(),
 
-    note: z.string().optional(),
+    merchant:
+        z.string()
+            .trim()
+            .optional(),
 
-    idempotencyKey: z.string().optional(),
+    note:
+        z.string()
+            .optional(),
+
+    idempotencyKey:
+        z.string()
+            .optional(),
 });
 
+
+export type CreateTransactionDTO =
+    z.infer<typeof createTransactionSchema>;
+
+
+/*
+ * --------------------------------------------------------------------------
+ * Update transaction
+ * --------------------------------------------------------------------------
+ *
+ * Updates are PATCH-style:
+ *
+ * - every field is optional
+ * - merchant/category can explicitly be cleared with null
+ * - omitted fields remain unchanged
+ */
+
 export const updateTransactionSchema =
-    createTransactionSchema;
+    z.object({
+
+        type:
+            z.enum([
+                TransactionType.EXPENSE,
+                TransactionType.INCOME,
+                TransactionType.TRANSFER,
+                TransactionType.INVESTMENT,
+            ])
+                .optional(),
+
+        amount:
+            z.coerce
+                .number()
+                .positive()
+                .optional(),
+
+        date:
+            z.string()
+                .optional(),
+
+        merchant:
+            z.string()
+                .trim()
+                .nullable()
+                .optional(),
+
+        categoryId:
+            z.string()
+                .nullable()
+                .optional(),
+
+        sourceAccountId:
+            z.string()
+                .nullable()
+                .optional(),
+
+        destinationAccountId:
+            z.string()
+                .nullable()
+                .optional(),
+
+        note:
+            z.string()
+                .nullable()
+                .optional(),
+
+        updateMerchantMapping:
+            z.boolean()
+                .optional(),
+    });
+
 
 export type UpdateTransactionDTO =
     z.infer<typeof updateTransactionSchema>;
+
 
 /*
  * --------------------------------------------------------------------------
@@ -36,52 +133,67 @@ export type UpdateTransactionDTO =
  * --------------------------------------------------------------------------
  */
 
-export const transactionSortBySchema = z.enum([
-    "date",
-    "createdAt",
-    "amount",
-    "merchant",
-    "category",
-]);
+export const transactionSortBySchema =
+    z.enum([
+        "date",
+        "createdAt",
+        "amount",
+        "merchant",
+        "category",
+    ]);
 
-export const transactionOrderSchema = z.enum([
-    "asc",
-    "desc",
-]);
 
-export const getTransactionsQuerySchema = z.object({
-    sortBy: transactionSortBySchema
-        .optional()
-        .default("date"),
+export const transactionOrderSchema =
+    z.enum([
+        "asc",
+        "desc",
+    ]);
 
-    order: transactionOrderSchema
-        .optional()
-        .default("desc"),
 
-    type: z
-        .nativeEnum(TransactionType)
-        .optional(),
+export const getTransactionsQuerySchema =
+    z.object({
 
-    categoryId: z
-        .string()
-        .optional(),
+        sortBy:
+            transactionSortBySchema
+                .optional()
+                .default("date"),
 
-    accountId: z
-        .string()
-        .optional(),
+        order:
+            transactionOrderSchema
+                .optional()
+                .default("desc"),
 
-    accountType: z
-        .nativeEnum(FinancialAccountType)
-        .optional(),
+        type:
+            z.nativeEnum(
+                TransactionType,
+            )
+                .optional(),
 
-    from: z
-        .string()
-        .optional(),
+        categoryId:
+            z.string()
+                .optional(),
 
-    to: z
-        .string()
-        .optional(),
-});
+        accountId:
+            z.string()
+                .optional(),
+
+        accountType:
+            z.nativeEnum(
+                FinancialAccountType,
+            )
+                .optional(),
+
+        from:
+            z.string()
+                .optional(),
+
+        to:
+            z.string()
+                .optional(),
+    });
+
 
 export type GetTransactionsQuery =
-    z.infer<typeof getTransactionsQuerySchema>;
+    z.infer<
+        typeof getTransactionsQuerySchema
+    >;

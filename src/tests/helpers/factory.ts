@@ -1,15 +1,18 @@
 import {FinancialAccountType, MerchantMappingSource, TransactionType,} from "@prisma/client";
 import {prisma} from "../../database/prisma";
 import {randomUUID} from "node:crypto";
+import {trackTestUser} from "./cleanup";
 
 const unique = (prefix: string) => `${prefix}-${randomUUID()}`;
 
 export async function createUser() {
-    return prisma.user.create({
+    const user = await prisma.user.create({
         data: {
             email: `${unique("user")}@test.com`,
         },
     });
+    trackTestUser(user.id);
+    return user;
 }
 
 export async function createBankAccount(

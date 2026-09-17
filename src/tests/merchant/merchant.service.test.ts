@@ -874,11 +874,295 @@ describe("resolveTransactionMerchant", () => {
         expect(result.merchant)
             .toEqual(merchant);
     });
+
+    it("preserves the raw merchant when merchant resolution fails", async () => {
+        vi.mocked(prisma.merchant.findUnique)
+            .mockRejectedValueOnce(
+                new Error("AI unavailable"),
+            );
+
+        const result = await resolveTransactionMerchant({
+            userId: "user-1",
+            merchantRaw: "SHAKILA THAPA",
+            transactionType: TransactionType.EXPENSE,
+            shouldCategorize: true,
+            requireCategory: false,
+        });
+
+        expect(result).toEqual({
+            merchant: null,
+            merchantId: null,
+            merchantRaw: "SHAKILA THAPA",
+            merchantNormalized: "Shakila Thapa",
+            category: null,
+            categoryId: null,
+            categoryAssignmentSource:
+            CategoryAssignmentSource.NONE,
+            confidence: null,
+        });
+
+        expect(
+            prisma.merchant.upsert,
+        ).not.toHaveBeenCalled();
+
+        expect(
+            prisma.merchantAlias.upsert,
+        ).not.toHaveBeenCalled();
+
+        expect(
+            resolveMerchantWithAI,
+        ).not.toHaveBeenCalled();
+    });
+
+    it("does not resolve a transaction reference as a merchant", async () => {
+        const result = await resolveTransactionMerchant({
+            userId: "user-1",
+            merchantRaw: "UPI/P2M/660615862577",
+            transactionType: TransactionType.EXPENSE,
+            shouldCategorize: true,
+            requireCategory: false,
+        });
+
+        expect(result).toEqual({
+            merchant: null,
+            merchantId: null,
+            merchantRaw: "UPI/P2M/660615862577",
+            merchantNormalized: "",
+            category: null,
+            categoryId: null,
+            categoryAssignmentSource:
+            CategoryAssignmentSource.NONE,
+            confidence: null,
+        });
+
+        expect(resolveMerchantWithAI)
+            .not.toHaveBeenCalled();
+
+        expect(prisma.merchant.upsert)
+            .not.toHaveBeenCalled();
+    });
+
+    it("keeps a real UPI counterparty as a merchant", async () => {
+        const merchant = {
+            id: "merchant-1",
+            name: "Shakila Thapa",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+
+        vi.mocked(prisma.merchant.findUnique)
+            .mockResolvedValueOnce(merchant);
+
+        const result = await resolveTransactionMerchant({
+            userId: "user-1",
+            merchantRaw: "SHAKILA THAPA",
+            transactionType: TransactionType.EXPENSE,
+            shouldCategorize: false,
+        });
+
+        expect(result.merchant)
+            .toEqual(merchant);
+
+        expect(result.merchantId)
+            .toBe("merchant-1");
+
+        expect(result.merchantRaw)
+            .toBe("SHAKILA THAPA");
+
+        expect(result.merchantNormalized)
+            .toBe("Shakila Thapa");
+    });
+
+    it("does not call AI when the normalized merchant already exists", async () => {
+        const merchant = {
+            id: "merchant-1",
+            name: "Shakila Thapa",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+
+        vi.mocked(prisma.merchant.findUnique)
+            .mockResolvedValueOnce(merchant);
+
+        const result = await resolveMerchant(
+            "shakila thapa",
+        );
+
+        expect(result.merchant)
+            .toEqual(merchant);
+
+        expect(result.confidence)
+            .toBe(1);
+
+        expect(result.fromCache)
+            .toBe(true);
+
+        expect(resolveMerchantWithAI)
+            .not.toHaveBeenCalled();
+
+        expect(prisma.merchant.upsert)
+            .not.toHaveBeenCalled();
+    });
 });
 
 describe("resolveMerchant", () => {
     beforeEach(() => {
         vi.resetAllMocks();
+    });
+
+    it("resolves an AI result that matches an existing alias to the canonical merchant", async () => {
+        const merchant = {
+            id: "merchant-1",
+            name: "Gowri EFuel",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+
+        const aiAlias = {
+            id: "alias-1",
+            alias: "Gowri E Fuel1",
+            merchantId: merchant.id,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            merchant,
+        };
+
+        vi.mocked(prisma.merchant.findUnique)
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(null);
+
+        vi.mocked(prisma.merchantAlias.findUnique)
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(aiAlias);
+
+        vi.mocked(resolveMerchantWithAI)
+            .mockResolvedValueOnce({
+                merchant: "Gowri E Fuel1",
+                confidence: 0.98,
+            });
+
+        const result =
+            await resolveMerchant(
+                "Gowri E Fue",
+            );
+
+        expect(result).toEqual({
+            merchant,
+            normalizedName: "Gowri EFuel",
+            confidence: 0.98,
+            fromCache: false,
+        });
+
+        expect(
+            prisma.merchant.upsert,
+        ).not.toHaveBeenCalled();
+
+        expect(
+            prisma.merchantAlias.upsert,
+        ).toHaveBeenCalledWith({
+            where: {
+                alias: "Gowri E Fue",
+            },
+            update: {},
+            create: {
+                merchantId: merchant.id,
+                alias: "Gowri E Fue",
+            },
+        });
+    });
+
+    it("reuses an existing canonical merchant returned by AI", async () => {
+        const merchant = {
+            id: "merchant-1",
+            name: "Gowri EFuel",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+
+        vi.mocked(prisma.merchant.findUnique)
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(merchant);
+
+        vi.mocked(prisma.merchantAlias.findUnique)
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(null);
+
+        vi.mocked(resolveMerchantWithAI)
+            .mockResolvedValueOnce({
+                merchant: "Gowri EFuel",
+                confidence: 0.99,
+            });
+
+        const result =
+            await resolveMerchant(
+                "Gowri E Fuel1",
+            );
+
+        expect(result).toEqual({
+            merchant,
+            normalizedName: "Gowri EFuel",
+            confidence: 0.99,
+            fromCache: false,
+        });
+
+        expect(
+            prisma.merchant.upsert,
+        ).not.toHaveBeenCalled();
+
+        expect(
+            prisma.merchantAlias.upsert,
+        ).toHaveBeenCalledWith({
+            where: {
+                alias: "Gowri E Fuel1",
+            },
+            update: {},
+            create: {
+                merchantId: merchant.id,
+                alias: "Gowri E Fuel1",
+            },
+        });
+    });
+
+    it("does not create a self-alias when the resolved name equals the canonical merchant", async () => {
+        const merchant = {
+            id: "merchant-1",
+            name: "Amazon",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+
+        vi.mocked(prisma.merchant.findUnique)
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(null);
+
+        vi.mocked(prisma.merchantAlias.findUnique)
+            .mockResolvedValueOnce(null)
+            .mockResolvedValueOnce(null);
+
+        vi.mocked(resolveMerchantWithAI)
+            .mockResolvedValueOnce({
+                merchant: "Amazon",
+                confidence: 0.95,
+            });
+
+        vi.mocked(prisma.merchant.upsert)
+            .mockResolvedValueOnce(merchant);
+
+        const result =
+            await resolveMerchant(
+                "Amazon",
+            );
+
+        expect(result).toEqual({
+            merchant,
+            normalizedName: "Amazon",
+            confidence: 0.95,
+            fromCache: false,
+        });
+
+        expect(
+            prisma.merchantAlias.upsert,
+        ).not.toHaveBeenCalled();
     });
 
     it("rejects an empty merchant name", async () => {
@@ -1150,117 +1434,6 @@ describe("resolveMerchant", () => {
         ).toHaveBeenCalled();
     });
 
-    it("falls back to the normalized merchant when AI returns an empty merchant", async () => {
-        const merchantName =
-            "pos.11329019@indus";
-
-        const merchant = {
-            id: "merchant-1",
-            name: "11329019",
-            createdAt: new Date(),
-            updatedAt: new Date(),
-        };
-
-        vi.mocked(prisma.merchant.findUnique)
-            .mockResolvedValue(null);
-
-        vi.mocked(prisma.merchantAlias.findUnique)
-            .mockResolvedValue(null);
-
-        vi.mocked(resolveMerchantWithAI)
-            .mockResolvedValueOnce({
-                merchant: "   ",
-                confidence: 0.9,
-            });
-
-        vi.mocked(prisma.merchant.upsert)
-            .mockResolvedValueOnce(merchant);
-
-        vi.mocked(prisma.merchantAlias.upsert)
-            .mockResolvedValueOnce({
-                id: "alias-1",
-                alias: merchantName,
-                merchantId: merchant.id,
-                createdAt: new Date(),
-                updatedAt: new Date(),
-            });
-
-        const result =
-            await resolveMerchant(merchantName);
-
-        expect(result).toEqual({
-            merchant,
-            normalizedName: "11329019",
-            confidence: 0,
-            fromCache: false,
-        });
-
-        expect(
-            resolveMerchantWithAI,
-        ).toHaveBeenCalledWith(
-            merchantName,
-        );
-    });
-
-    it("falls back to the normalized merchant when AI resolution throws", async () => {
-        const merchantName =
-            "pos.11329019@indus";
-
-        const merchant = {
-            id: "merchant-1",
-            name: "11329019",
-            createdAt: new Date(),
-            updatedAt: new Date(),
-        };
-
-        vi.mocked(prisma.merchant.findUnique)
-            .mockResolvedValue(null);
-
-        vi.mocked(prisma.merchantAlias.findUnique)
-            .mockResolvedValue(null);
-
-        vi.mocked(resolveMerchantWithAI)
-            .mockRejectedValueOnce(
-                new Error("AI unavailable"),
-            );
-
-        vi.mocked(prisma.merchant.upsert)
-            .mockResolvedValueOnce(merchant);
-
-        vi.mocked(prisma.merchantAlias.upsert)
-            .mockResolvedValueOnce({
-                id: "alias-1",
-                alias: merchantName,
-                merchantId: merchant.id,
-                createdAt: new Date(),
-                updatedAt: new Date(),
-            });
-
-        const result =
-            await resolveMerchant(merchantName);
-
-        expect(result).toEqual({
-            merchant,
-            normalizedName: "11329019",
-            confidence: 0,
-            fromCache: false,
-        });
-
-        expect(
-            resolveMerchantWithAI,
-        ).toHaveBeenCalledWith(
-            merchantName,
-        );
-
-        expect(
-            prisma.merchant.upsert,
-        ).toHaveBeenCalled();
-
-        expect(
-            prisma.merchantAlias.upsert,
-        ).toHaveBeenCalled();
-    });
-
     it("preserves low AI confidence", async () => {
         const merchantName =
             "unknown-store@indus";
@@ -1523,5 +1696,64 @@ describe("resolveMerchant", () => {
 
         expect(resolveMerchantWithAI)
             .toHaveBeenCalledTimes(1);
+    });
+
+    it("throws when AI returns an empty merchant", async () => {
+        const merchantName = "some-unknown-store@indus";
+
+        vi.mocked(prisma.merchant.findUnique)
+            .mockResolvedValue(null);
+
+        vi.mocked(prisma.merchantAlias.findUnique)
+            .mockResolvedValue(null);
+
+        vi.mocked(resolveMerchantWithAI)
+            .mockResolvedValueOnce({
+                merchant: "   ",
+                confidence: 0.9,
+            });
+
+        await expect(
+            resolveMerchant(merchantName),
+        ).rejects.toThrow(
+            "AI returned an invalid merchant.",
+        );
+
+        expect(
+            prisma.merchant.upsert,
+        ).not.toHaveBeenCalled();
+
+        expect(
+            prisma.merchantAlias.upsert,
+        ).not.toHaveBeenCalled();
+    });
+
+    it("does not create a merchant when AI resolution throws", async () => {
+        const merchantName = "some-unknown-store@indus";
+
+        vi.mocked(prisma.merchant.findUnique)
+            .mockResolvedValue(null);
+
+        vi.mocked(prisma.merchantAlias.findUnique)
+            .mockResolvedValue(null);
+
+        vi.mocked(resolveMerchantWithAI)
+            .mockRejectedValueOnce(
+                new Error("AI unavailable"),
+            );
+
+        await expect(
+            resolveMerchant(merchantName),
+        ).rejects.toThrow(
+            "AI unavailable",
+        );
+
+        expect(
+            prisma.merchant.upsert,
+        ).not.toHaveBeenCalled();
+
+        expect(
+            prisma.merchantAlias.upsert,
+        ).not.toHaveBeenCalled();
     });
 });

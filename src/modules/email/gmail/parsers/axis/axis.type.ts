@@ -1,6 +1,4 @@
-import {
-    ParsedTransaction,
-} from "../types";
+import {ParsedTransaction} from "../types";
 
 
 export enum AxisEmailFormat {
@@ -11,12 +9,9 @@ export enum AxisEmailFormat {
     BURGUNDY_CREDIT = "BURGUNDY_CREDIT",
 }
 
-
 export interface AxisParserContext {
     subject?: string | null;
     body: string;
 }
 
-
-export type AxisParsedTransaction =
-    ParsedTransaction;
+export type AxisParsedTransaction = ParsedTransaction;

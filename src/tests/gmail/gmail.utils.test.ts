@@ -2,11 +2,11 @@ import {beforeEach, describe, expect, it, vi} from "vitest";
 import {
     generateGoogleState,
     getConnectedGmailAccount,
-    GMAIL_QUERY,
     GOOGLE_SCOPES,
     verifyGoogleState,
 } from "../../modules/email/gmail/gmail.utils";
 
+export const GMAIL_QUERY = "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:30d";
 const mocks = vi.hoisted(() => ({
     findUnique: vi.fn(),
     OAuth2: vi.fn(),

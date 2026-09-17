@@ -218,4 +218,87 @@ describe("normalizeMerchantName", () => {
             ).toBe("Google");
         });
     });
+
+    describe("transaction references", () => {
+
+        it("rejects UPI P2M reference without merchant", () => {
+            expect(
+                normalizeMerchantName(
+                    "P2M 660615862577",
+                ),
+            ).toBe("");
+        });
+
+
+        it("rejects UPI P2A reference without merchant", () => {
+            expect(
+                normalizeMerchantName(
+                    "P2A 624207512807",
+                ),
+            ).toBe("");
+        });
+
+
+        it("rejects UPI P2M reference with UPI prefix", () => {
+            expect(
+                normalizeMerchantName(
+                    "UPI P2M 660615862577",
+                ),
+            ).toBe("");
+        });
+
+
+        it("rejects UPI P2A reference with UPI prefix", () => {
+            expect(
+                normalizeMerchantName(
+                    "UPI P2A 624207512807",
+                ),
+            ).toBe("");
+        });
+
+
+        it("rejects slash-form UPI P2M reference", () => {
+            expect(
+                normalizeMerchantName(
+                    "UPI/P2M/660615862577",
+                ),
+            ).toBe("");
+        });
+
+
+        it("rejects slash-form UPI P2A reference", () => {
+            expect(
+                normalizeMerchantName(
+                    "UPI/P2A/624207512807",
+                ),
+            ).toBe("");
+        });
+
+
+        it("rejects a bare numeric transaction reference", () => {
+            expect(
+                normalizeMerchantName(
+                    "660615862577",
+                ),
+            ).toBe("");
+        });
+
+
+        it("keeps a real UPI counterparty", () => {
+            expect(
+                normalizeMerchantName(
+                    "SHAKILA THAPA",
+                ),
+            ).toBe("Shakila Thapa");
+        });
+
+
+        it("keeps a real multi-word UPI counterparty", () => {
+            expect(
+                normalizeMerchantName(
+                    "BAJARANGI KUMAR",
+                ),
+            ).toBe("Bajarangi Kumar");
+        });
+    });
 });

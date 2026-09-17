@@ -23,15 +23,13 @@ const STOP_WORDS = new Set([
     "online",
 ]);
 
-/**
- * Canonical merchant display names.
- *
- * The key is always lowercase because the normalized lookup
- * words are lowercase.
- *
- * The value is the canonical name that should be stored/displayed.
- */
+
+/* -------------------------------------------------------------------------- */
+/*                         Canonical Merchant Aliases                         */
+/* -------------------------------------------------------------------------- */
+
 const ALIASES: Record<string, string> = {
+
     amazon: "Amazon",
     amzn: "Amazon",
 
@@ -50,6 +48,11 @@ const ALIASES: Record<string, string> = {
     flipkart: "Flipkart",
 };
 
+
+/* -------------------------------------------------------------------------- */
+/*                              Prefix Removal                                */
+/* -------------------------------------------------------------------------- */
+
 const PAYMENT_GATEWAY_PREFIXES = [
     "RAZORPAY",
     "RAZ",
@@ -64,6 +67,7 @@ const PAYMENT_GATEWAY_PREFIXES = [
     "AMAZON PAY",
 ] as const;
 
+
 const TRANSACTION_PREFIXES = [
     "UPI",
     "POS",
@@ -75,6 +79,7 @@ const TRANSACTION_PREFIXES = [
     "CREDIT CARD",
 ] as const;
 
+
 const REPLACEMENTS = [
     /\bPRIVATE LIMITED\b/g,
     /\bPVT LTD\b/g,
@@ -83,66 +88,186 @@ const REPLACEMENTS = [
     /\bLTD\b/g,
 ];
 
-export const normalizeMerchant = (merchant: string): string => {
-    let value = merchant.toUpperCase().trim();
+
+/* -------------------------------------------------------------------------- */
+/*                              Basic Normalizer                              */
+/* -------------------------------------------------------------------------- */
+
+export const normalizeMerchant = (
+    merchant: string,
+): string => {
+
+    let value =
+        merchant
+            .toUpperCase()
+            .trim();
+
 
     for (const regex of REPLACEMENTS) {
-        value = value.replace(regex, "");
+
+        value =
+            value.replace(
+                regex,
+                "",
+            );
     }
 
-    value = value.replace(/\s+/g, " ").trim();
+
+    value =
+        value
+            .replace(/\s+/g, " ")
+            .trim();
+
 
     return value;
 };
 
-const escapeRegex = (value: string): string =>
-    value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/* -------------------------------------------------------------------------- */
+/*                              Prefix Helpers                                */
+/* -------------------------------------------------------------------------- */
+
+const escapeRegex = (
+    value: string,
+): string =>
+    value.replace(
+        /[.*+?^${}()|[\]\\]/g,
+        "\\$&",
+    );
+
 
 const stripPrefixes = (
     value: string,
     prefixes: readonly string[],
 ): string => {
-    let result = value.trim();
+
+    let result =
+        value.trim();
+
 
     let changed = true;
 
+
     while (changed) {
+
         changed = false;
 
-        for (const prefix of prefixes) {
-            const regex = new RegExp(
-                `^${escapeRegex(prefix)}(?:[\\s*:/-]+)?`,
-                "i",
-            );
 
-            if (regex.test(result)) {
-                result = result.replace(regex, "").trim();
+        for (const prefix of prefixes) {
+
+            const regex =
+                new RegExp(
+                    `^${escapeRegex(prefix)}(?:[\\s*:/-]+)?`,
+                    "i",
+                );
+
+
+            if (
+                regex.test(result)
+            ) {
+
+                result =
+                    result
+                        .replace(
+                            regex,
+                            "",
+                        )
+                        .trim();
+
                 changed = true;
             }
         }
     }
 
+
     return result;
 };
 
+
+/* -------------------------------------------------------------------------- */
+/*                     Transaction Reference Detection                        */
+/* -------------------------------------------------------------------------- */
+
 /**
- * Convert a cleaned merchant name into a display-friendly
- * canonical form.
+ * Values containing only payment/transaction infrastructure
+ * are not merchants.
  *
  * Examples:
  *
- * netflix       -> Netflix
- * starbucks     -> Starbucks
- * unknown-store -> Unknown Store
+ *   P2M 660615862577
+ *   P2A 624047309652
+ *   UPI P2M 660615862577
+ *   UPI/P2M/660615862577
+ *
+ * These must never become Merchant rows.
  */
-const toDisplayName = (value: string): string =>
-    value
+const isTransactionReferenceOnly = (
+    value: string,
+): boolean => {
+
+    const normalized =
+        value
+            .toLowerCase()
+            .replace(
+                /[^a-z0-9]+/g,
+                " ",
+            )
+            .trim();
+
+
+    if (!normalized) {
+        return true;
+    }
+
+
+    /*
+     * UPI/P2M/P2A followed by a numeric reference,
+     * with no human-readable merchant/counterparty.
+     */
+
+    if (
+        /^(?:upi\s+)?p2[am]\s+\d{6,}$/.test(
+            normalized,
+        )
+    ) {
+        return true;
+    }
+
+
+    /*
+     * A bare long numeric reference is not a merchant.
+     */
+
+    if (
+        /^\d{6,}$/.test(
+            normalized,
+        )
+    ) {
+        return true;
+    }
+
+
+    return false;
+};
+
+
+/* -------------------------------------------------------------------------- */
+/*                         Display Name Conversion                            */
+/* -------------------------------------------------------------------------- */
+
+const toDisplayName = (
+    value: string,
+): string => {
+
+    return value
         .split(" ")
         .filter(Boolean)
-        .map((word) => {
+        .map(word => {
+
             if (!word) {
                 return word;
             }
+
 
             return (
                 word.charAt(0).toUpperCase() +
@@ -150,97 +275,205 @@ const toDisplayName = (value: string): string =>
             );
         })
         .join(" ");
+};
+
+
+/* -------------------------------------------------------------------------- */
+/*                         Merchant Name Normalizer                           */
+
+/* -------------------------------------------------------------------------- */
 
 export function normalizeMerchantName(
     name?: string | null,
 ): string {
+
     if (!name) {
         return "";
     }
 
-    let normalized = name.trim();
 
-    normalized = stripPrefixes(
-        normalized,
-        PAYMENT_GATEWAY_PREFIXES,
-    );
+    let normalized =
+        name.trim();
 
-    normalized = stripPrefixes(
-        normalized,
-        TRANSACTION_PREFIXES,
-    );
 
-    normalized = normalized.toLowerCase();
+    /*
+     * Reject transaction-reference-only values
+     * before prefix stripping destroys their context.
+     */
 
-    // Replace separators before removing punctuation.
-    normalized = normalized.replace(/[-_.]/g, " ");
+    if (
+        isTransactionReferenceOnly(
+            normalized,
+        )
+    ) {
+        return "";
+    }
 
-    // Remove UPI handles.
-    normalized = normalized.replace(
-        /@[a-z0-9._-]+/gi,
-        "",
-    );
 
-    // Remove URLs.
-    normalized = normalized.replace(
-        /https?:\/\/\S+/g,
-        " ",
-    );
+    normalized =
+        stripPrefixes(
+            normalized,
+            PAYMENT_GATEWAY_PREFIXES,
+        );
 
-    // Remove emails.
-    normalized = normalized.replace(
-        /\S+@\S+\.\S+/g,
-        " ",
-    );
 
-    // Replace punctuation with spaces.
-    normalized = normalized.replace(
-        /[^a-z0-9\s]/g,
-        " ",
-    );
+    normalized =
+        stripPrefixes(
+            normalized,
+            TRANSACTION_PREFIXES,
+        );
 
-    // Collapse whitespace.
-    normalized = normalized.replace(
-        /\s+/g,
-        " ",
-    ).trim();
+
+    /*
+     * Prefix stripping may have reduced the value
+     * to a transaction reference.
+     */
+
+    if (
+        isTransactionReferenceOnly(
+            normalized,
+        )
+    ) {
+        return "";
+    }
+
+
+    normalized =
+        normalized.toLowerCase();
+
+
+    /*
+     * Replace separators before removing punctuation.
+     */
+
+    normalized =
+        normalized.replace(
+            /[-_.]/g,
+            " ",
+        );
+
+
+    /*
+     * Remove UPI handles.
+     */
+
+    normalized =
+        normalized.replace(
+            /@[a-z0-9._-]+/gi,
+            "",
+        );
+
+
+    /*
+     * Remove URLs.
+     */
+
+    normalized =
+        normalized.replace(
+            /https?:\/\/\S+/g,
+            " ",
+        );
+
+
+    /*
+     * Remove emails.
+     */
+
+    normalized =
+        normalized.replace(
+            /\S+@\S+\.\S+/g,
+            " ",
+        );
+
+
+    /*
+     * Replace punctuation with spaces.
+     */
+
+    normalized =
+        normalized.replace(
+            /[^a-z0-9\s]/g,
+            " ",
+        );
+
+
+    /*
+     * Collapse whitespace.
+     */
+
+    normalized =
+        normalized
+            .replace(
+                /\s+/g,
+                " ",
+            )
+            .trim();
+
 
     if (!normalized) {
         return "";
     }
 
-    const words = normalized
-        .split(" ")
-        .filter(Boolean)
-        .filter(
-            (word) => !STOP_WORDS.has(word),
-        );
 
-    if (words.length === 0) {
+    const words =
+        normalized
+            .split(" ")
+            .filter(Boolean)
+            .filter(
+                word =>
+                    !STOP_WORDS.has(
+                        word,
+                    ),
+            );
+
+
+    if (
+        words.length === 0
+    ) {
         return "";
     }
 
-    /**
-     * Known merchant:
-     *
-     * netflix -> Netflix
-     * swiggy  -> Swiggy
-     * amzn    -> Amazon
+
+    /*
+     * A value that becomes only a transaction reference
+     * after cleanup is still not a merchant.
      */
+
+    const cleaned =
+        words.join(" ");
+
+
+    if (
+        isTransactionReferenceOnly(
+            cleaned,
+        )
+    ) {
+        return "";
+    }
+
+
+    /*
+     * Known merchant aliases.
+     */
+
     for (const word of words) {
-        const alias = ALIASES[word];
+
+        const alias =
+            ALIASES[word];
+
 
         if (alias) {
             return alias;
         }
     }
 
-    /**
+
+    /*
      * Unknown merchant:
      *
-     * starbucks -> Starbucks
-     * unknown store -> Unknown Store
+     * Return a readable canonical representation.
      */
+
     return toDisplayName(
         [...new Set(words)].join(" "),
     );

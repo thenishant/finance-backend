@@ -1,9 +1,5 @@
-import {createISTDate,} from "../../../../../date";
+import {createISTDate} from "../../../../../date";
 
-
-/* -------------------------------------------------------------------------- */
-/* Merchant cleanup                                                           */
-/* -------------------------------------------------------------------------- */
 
 /* -------------------------------------------------------------------------- */
 /* Merchant cleanup                                                           */
@@ -12,35 +8,139 @@ import {createISTDate,} from "../../../../../date";
 const cleanAxisMerchant = (
     value: string,
 ): string | null => {
-    let merchant = value
-        .replace(/\s+/g, " ")
-        .trim();
+
+    let merchant =
+        value
+            .replace(/\s+/g, " ")
+            .trim();
+
 
     /*
      * Axis/Gmail can join the transaction value with
      * the email footer.
-     *
-     * Examples:
-     *
-     * ACH-CR-BIKAJI FOODS INT LT. Feel free to contact us.
-     *
-     * Birt Feel free to connect with us for any clarification.
-     *
-     * We only want the transaction/counterparty part.
      */
+
     merchant = merchant.replace(
         /\s+(?:Feel\s+free\s+to\s+(?:contact|connect)\b|To\s+check\s+your\s+available\s+balance|For\s+details|Always\s+open\s+to\s+help|Regards|Reach\s+us\s+at|Copyright|Please\s+do\s+not)\b.*$/i,
         "",
     );
 
+
     /*
      * Remove trailing punctuation.
      */
-    merchant = merchant
-        .replace(/[.!?]+$/, "")
-        .trim();
+
+    merchant =
+        merchant
+            .replace(/[.!?]+$/, "")
+            .trim();
+
 
     return merchant || null;
+};
+
+
+/* -------------------------------------------------------------------------- */
+/* UPI merchant cleanup                                                       */
+/* -------------------------------------------------------------------------- */
+
+const extractAxisUpiCounterparty = (
+    value: string,
+): string | null => {
+
+    const normalized =
+        value
+            .replace(/\s+/g, " ")
+            .trim();
+
+
+    /*
+     * Standard Axis UPI formats:
+     *
+     * UPI/P2M/660615862577/SHAKILA THAPA
+     *
+     * UPI/P2A/624207512807/DEEPANSHU/SBIN/Birt
+     *
+     * The transaction reference is NOT a merchant.
+     *
+     * We therefore take the counterparty immediately after
+     * the P2A/P2M reference.
+     */
+
+    const slashParts =
+        normalized
+            .split("/")
+            .map(part => part.trim())
+            .filter(Boolean);
+
+
+    if (
+        slashParts.length >= 4 &&
+        /^UPI$/i.test(slashParts[0]) &&
+        /^P2[AM]$/i.test(slashParts[1]) &&
+        /^\d{8,}$/.test(slashParts[2])
+    ) {
+
+        const counterparty =
+            slashParts[3];
+
+
+        if (!counterparty) {
+            return null;
+        }
+
+
+        /*
+         * Some Axis descriptions append bank/provider
+         * information after the counterparty.
+         *
+         * We intentionally take only the first counterparty
+         * segment instead of turning SBIN/etc. into a merchant.
+         */
+
+        return cleanAxisMerchant(
+            counterparty,
+        );
+    }
+
+
+    /*
+     * Some emails can flatten the UPI description:
+     *
+     * P2M 660615862577 SHAKILA THAPA
+     *
+     * Handle that form as well.
+     */
+
+    const flattenedMatch =
+        normalized.match(
+            /^UPI\s+P2[AM]\s+\d{8,}\s+(.+)$/i,
+        );
+
+
+    if (flattenedMatch?.[1]) {
+
+        return cleanAxisMerchant(
+            flattenedMatch[1],
+        );
+    }
+
+
+    /*
+     * If this is a UPI value but we cannot safely identify
+     * the counterparty, do NOT pass the raw payment reference
+     * to merchant resolution.
+     */
+
+    if (
+        /^UPI\b/i.test(normalized) ||
+        /^P2[AM]\b/i.test(normalized)
+    ) {
+        return null;
+    }
+
+
+    return null;
 };
 
 
@@ -51,41 +151,47 @@ const cleanAxisMerchant = (
 export const extractAxisTransactionInfo = (
     body: string,
 ): string | null => {
-    const match = body.match(
-        /Transaction\s+Info\s*:\s*([\s\S]*?)(?=\s*(?:If\s+this\s+transaction|To\s+block|For\s+details|Feel\s+free\s+to\s+(?:contact|connect)|Regards|Reach\s+us\s+at|Copyright|Please\s+do\s+not)\b|$)/i,
-    );
+
+    const match =
+        body.match(
+            /Transaction\s+Info\s*:\s*([\s\S]*?)(?=\s*(?:If\s+this\s+transaction|To\s+block|For\s+details|Feel\s+free\s+to\s+(?:contact|connect)|Regards|Reach\s+us\s+at|Copyright|Please\s+do\s+not)\b|$)/i,
+        );
+
 
     if (!match?.[1]) {
         return null;
     }
 
-    let value = match[1]
-        .replace(/\s+/g, " ")
-        .trim();
+
+    let value =
+        match[1]
+            .replace(/\s+/g, " ")
+            .trim();
+
 
     /*
-     * UPI transaction format:
+     * UPI transaction.
      *
-     * UPI/P2M/660615862577/SHAKILA THAPA
-     * UPI/P2A/624207512807/DEEPANSHU/SBIN/Birt
+     * Never expose:
      *
-     * Expected:
+     * - P2A
+     * - P2M
+     * - transaction reference numbers
+     * - trailing bank/provider descriptors
      *
-     * [0] UPI
-     * [1] P2M/P2A
-     * [2] transaction reference
-     * [3] counterparty
-     *
-     * We only want the counterparty.
+     * as merchant names.
      */
-    if (/^UPI\s*\//i.test(value)) {
-        const parts = value
-            .split("/")
-            .map(part => part.trim())
-            .filter(Boolean);
 
-        value = parts[3] ?? "";
+    if (
+        /^UPI\s*[\/\s]/i.test(value) ||
+        /^P2[AM]\s*[\/\s]/i.test(value)
+    ) {
+
+        return extractAxisUpiCounterparty(
+            value,
+        );
     }
+
 
     /*
      * POS identifiers such as:
@@ -93,15 +199,20 @@ export const extractAxisTransactionInfo = (
      * pos.11329019@indus
      *
      * don't contain a meaningful merchant name.
-     * Don't send these to AI as merchants.
      */
+
     if (
-        /^pos\.\d+@(?:indus|[a-z0-9.-]+)$/i.test(value)
+        /^pos\.\d+@(?:indus|[a-z0-9.-]+)$/i.test(
+            value,
+        )
     ) {
         return null;
     }
 
-    return cleanAxisMerchant(value);
+
+    return cleanAxisMerchant(
+        value,
+    );
 };
 
 
@@ -113,18 +224,25 @@ export const extractAxisAmount = (
     text: string,
     patterns: RegExp[],
 ): number | null => {
+
     for (const pattern of patterns) {
-        const match = text.match(pattern);
+
+        const match =
+            text.match(pattern);
+
 
         if (!match?.[1]) {
             continue;
         }
 
-        const amount = Number(
-            match[1]
-                .replace(/,/g, "")
-                .trim(),
-        );
+
+        const amount =
+            Number(
+                match[1]
+                    .replace(/,/g, "")
+                    .trim(),
+            );
+
 
         if (
             Number.isFinite(amount) &&
@@ -133,6 +251,7 @@ export const extractAxisAmount = (
             return amount;
         }
     }
+
 
     return null;
 };
@@ -145,6 +264,7 @@ export const extractAxisAmount = (
 export const extractAxisAccountLast4 = (
     body: string,
 ): string | null => {
+
     /*
      * Supports:
      *
@@ -157,12 +277,15 @@ export const extractAxisAccountLast4 = (
      * Credit Card No. XXXX1256
      */
 
-    const match = body.match(
-        /(?:A\/c\s+no\.?|Account\s+Number|Credit\s+Card\s+No\.?)\s*:?\s*[^0-9]*?(\d{4})(?!\d)/i,
-    );
+    const match =
+        body.match(
+            /(?:A\/c\s+no\.?|Account\s+Number|Credit\s+Card\s+No\.?)\s*:?\s*[^0-9]*?(\d{4})(?!\d)/i,
+        );
+
 
     return match?.[1] ?? null;
 };
+
 
 /* -------------------------------------------------------------------------- */
 /* Credit Card Merchant                                                       */
@@ -171,24 +294,34 @@ export const extractAxisAccountLast4 = (
 export const extractAxisCreditCardMerchant = (
     body: string,
 ): string | null => {
-    const match = body.match(
-        /Merchant\s+Name\s*:\s*([^\r\n]+)/i,
-    );
+
+    const match =
+        body.match(
+            /Merchant\s+Name\s*:\s*([^\r\n]+)/i,
+        );
+
 
     if (!match?.[1]) {
         return null;
     }
 
-    let value = match[1]
-        .replace(/\s+/g, " ")
-        .trim();
 
-    value = value.replace(
-        /\s+(?:Axis\s+Bank\s+Credit\s+Card|Credit\s+Card\s+No\.?|Available\s+Limit|Total\s+Credit\s+Limit)\b.*$/i,
-        "",
+    let value =
+        match[1]
+            .replace(/\s+/g, " ")
+            .trim();
+
+
+    value =
+        value.replace(
+            /\s+(?:Axis\s+Bank\s+Credit\s+Card|Credit\s+Card\s+No\.?|Available\s+Limit|Total\s+Credit\s+Limit)\b.*$/i,
+            "",
+        );
+
+
+    return cleanAxisMerchant(
+        value,
     );
-
-    return cleanAxisMerchant(value);
 };
 
 
@@ -199,6 +332,7 @@ export const extractAxisCreditCardMerchant = (
 export const extractAxisBurgundyCounterparty = (
     body: string,
 ): string | null => {
+
     /*
      * Example:
      *
@@ -208,13 +342,16 @@ export const extractAxisBurgundyCounterparty = (
      * We capture only what follows "by".
      */
 
-    const match = body.match(
-        /\bby\s+(.+?)(?=\r?\n|$)/i,
-    );
+    const match =
+        body.match(
+            /\bby\s+(.+?)(?=\r?\n|$)/i,
+        );
+
 
     if (!match?.[1]) {
         return null;
     }
+
 
     return cleanAxisMerchant(
         match[1],
@@ -230,44 +367,58 @@ export const parseAxisDate = (
     date: string,
     time: string,
 ): Date | undefined => {
-    const dateMatch = date.match(
-        /^(\d{2})-(\d{2})-(\d{2}|\d{4})$/,
-    );
+
+    const dateMatch =
+        date.match(
+            /^(\d{2})-(\d{2})-(\d{2}|\d{4})$/,
+        );
+
 
     if (!dateMatch) {
         return undefined;
     }
 
+
     const day =
         Number(dateMatch[1]);
+
 
     const month =
         Number(dateMatch[2]);
 
+
     const yearValue =
         Number(dateMatch[3]);
+
 
     const year =
         dateMatch[3].length === 2
             ? 2000 + yearValue
             : yearValue;
 
-    const timeMatch = time.match(
-        /^(\d{2}):(\d{2}):(\d{2})$/,
-    );
+
+    const timeMatch =
+        time.match(
+            /^(\d{2}):(\d{2}):(\d{2})$/,
+        );
+
 
     if (!timeMatch) {
         return undefined;
     }
 
+
     const hour =
         Number(timeMatch[1]);
+
 
     const minute =
         Number(timeMatch[2]);
 
+
     const second =
         Number(timeMatch[3]);
+
 
     return createISTDate(
         year,
@@ -287,13 +438,17 @@ export const parseAxisDate = (
 export const extractAxisDate = (
     body: string,
 ): Date | undefined => {
-    const match = body.match(
-        /(\d{2}-\d{2}-(?:\d{2}|\d{4}))[,]?\s+(?:at\s+)?(\d{2}:\d{2}:\d{2})\s+IST/i,
-    );
+
+    const match =
+        body.match(
+            /(\d{2}-\d{2}-(?:\d{2}|\d{4}))[,]?\s+(?:at\s+)?(\d{2}:\d{2}:\d{2})\s+IST/i,
+        );
+
 
     if (!match) {
         return undefined;
     }
+
 
     return parseAxisDate(
         match[1],
