@@ -2,11 +2,12 @@ import {beforeEach, describe, expect, it, vi} from "vitest";
 import {
     generateGoogleState,
     getConnectedGmailAccount,
+    GMAIL_QUERY,
     GOOGLE_SCOPES,
     verifyGoogleState,
 } from "../../modules/email/gmail/gmail.utils";
+import {BankProvider, detectBankProvider,} from "../../modules/email/gmail/detector/bank.detector";
 
-export const GMAIL_QUERY = "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in} newer_than:30d";
 const mocks = vi.hoisted(() => ({
     findUnique: vi.fn(),
     OAuth2: vi.fn(),
@@ -102,18 +103,45 @@ describe("gmail.utils", () => {
     });
 
     describe("constants", () => {
-        it("contains the expected Gmail query", () => {
-            expect(GMAIL_QUERY).toContain(
-                "alerts@axis.bank.in",
-            );
+        it("includes every bank sender the detector recognizes", () => {
+            /*
+             * GMAIL_QUERY is derived from the same BANK_SENDERS map
+             * detectBankProvider uses, specifically so a bank that
+             * is supported for detection/parsing can never be
+             * silently left out of what an initial-sync backfill
+             * actually searches for. This test locks that in: any
+             * sender the detector matches must also appear in the
+             * search query.
+             */
+            for (
+                const provider
+                of [
+                    BankProvider.AXIS,
+                    BankProvider.HDFC,
+                    BankProvider.SBI,
+                ]
+                ) {
+                const sampleSenders: Record<string, string> = {
+                    [BankProvider.AXIS]: "alerts@axis.bank.in",
+                    [BankProvider.HDFC]: "alerts@hdfcbank.bank.in",
+                    [BankProvider.SBI]: "alerts.sbi.bank.in",
+                };
 
-            expect(GMAIL_QUERY).toContain(
-                "hdfcbank.bank.in",
-            );
+                const sender = sampleSenders[provider];
 
-            expect(GMAIL_QUERY).toContain(
-                "newer_than:30d",
-            );
+                expect(
+                    detectBankProvider(sender),
+                ).toBe(provider);
+
+                const senderDomain =
+                    sender.replace(
+                        /^alerts@?/,
+                        "",
+                    );
+
+                expect(GMAIL_QUERY)
+                    .toContain(senderDomain);
+            }
         });
 
         it("contains Gmail readonly scope", () => {

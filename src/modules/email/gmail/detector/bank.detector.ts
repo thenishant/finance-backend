@@ -5,7 +5,7 @@ export enum BankProvider {
     UNKNOWN = "UNKNOWN",
 }
 
-const BANK_SENDERS = {
+export const BANK_SENDERS = {
     AXIS: "alerts@axis.bank.in",
     HDFC: "hdfcbank.bank.in",
     SBI: "alerts.sbi.bank.in",

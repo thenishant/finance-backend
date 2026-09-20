@@ -2,10 +2,23 @@ import jwt from "jsonwebtoken";
 import {gmail_v1, google} from "googleapis";
 
 import {prisma} from "../../../database/prisma";
+import {GmailReconnectRequiredError} from "../../../error/GmailReconnectRequiredError";
+import {BANK_SENDERS} from "./detector/bank.detector";
 
 const JWT_SECRET = process.env.JWT_SECRET!;
 
-export const GMAIL_QUERY = "{from:alerts@axis.bank.in from:alerts@hdfcbank.bank.in}";
+/*
+ * Built from BANK_SENDERS (the same list detectBankProvider uses)
+ * rather than a separately hardcoded set of senders, so a bank
+ * that is supported for parsing/detection can never silently be
+ * excluded from what a backfill (initial sync) actually searches
+ * for. Adding a bank to BANK_SENDERS is now the only step needed.
+ */
+export const GMAIL_QUERY = `{${
+    Object.values(BANK_SENDERS)
+        .map((sender) => `from:${sender}`)
+        .join(" ")
+}}`;
 
 export const GOOGLE_SCOPES = [
     "openid",
@@ -132,6 +145,10 @@ export const getConnectedGmailAccount =
             throw new Error(
                 "Gmail account not connected",
             );
+        }
+
+        if (account.needsReconnect) {
+            throw new GmailReconnectRequiredError();
         }
 
         return account;

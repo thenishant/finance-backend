@@ -115,9 +115,31 @@ export const disconnectGmail = async (
 
     }
 
-    await prisma.gmailAccount.delete({
+    /*
+     * Soft-disconnect: the row (and critically, historyId/
+     * lastSyncAt) is kept rather than deleted. needsReconnect
+     * blocks the stale refreshToken from being used for anything
+     * until the user reconnects - but when they do, connectGoogleAccount
+     * reuses this same row, so the very next sync is an exact
+     * `history.list(startHistoryId)` catch-up covering everything
+     * that arrived while disconnected, instead of an approximate,
+     * date-filtered re-scan that can miss things (a narrow sender
+     * list, day-granularity date search, clock skew, ...).
+     *
+     * If the gap turns out to be long enough that Gmail has
+     * expired that history (roughly a week or more), the existing
+     * GmailHistoryExpiredError handling in executeSyncMailbox
+     * already falls back to a full backfill automatically - this
+     * just makes the precise path the first thing tried, always.
+     */
+    await prisma.gmailAccount.update({
         where: {
             id: account.id,
+        },
+        data: {
+            needsReconnect: true,
+            reconnectReason: "user_disconnected",
+            watchExpiresAt: null,
         },
     });
 
@@ -208,6 +230,8 @@ export const connectGoogleAccount = async ({
             update: {
                 email,
                 refreshToken,
+                needsReconnect: false,
+                reconnectReason: null,
             },
             create: {
                 userId: payload.userId,
@@ -216,9 +240,35 @@ export const connectGoogleAccount = async ({
             },
         });
 
-    await startGmailWatch(
-        gmailAccount,
-    );
+    try {
+        await startGmailWatch(
+            gmailAccount,
+        );
+    } catch (error) {
+        /*
+         * The account is already connected and usable (manual
+         * /sync and the watch-renewal cron both still work). Do
+         * not fail the whole OAuth callback over a push-watch
+         * hiccup - that would tell the user "connection failed"
+         * while a valid, working GmailAccount already exists,
+         * which is more confusing than a delayed watch.
+         *
+         * watchExpiresAt is left null here, and the renewal cron
+         * (gmail-watch.job.ts) treats null the same as "expiring
+         * now", so it will retry this automatically.
+         */
+        console.error(
+            "[Gmail] Failed to start watch during connect; will retry via renewal job",
+            {
+                userId: payload.userId,
+                email,
+                message:
+                    error instanceof Error
+                        ? error.message
+                        : String(error),
+            },
+        );
+    }
 
     console.info(
         existingAccount
@@ -245,7 +295,11 @@ export const getGoogleUrl = async (
         }
     });
 
-    if (account?.refreshToken && account.email) {
+    if (
+        account?.refreshToken &&
+        account.email &&
+        !account.needsReconnect
+    ) {
         return {
             connected: true,
             email: account.email,
@@ -256,6 +310,7 @@ export const getGoogleUrl = async (
     const client = createGoogleClient();
     return {
         connected: false,
+        needsReconnect: account?.needsReconnect ?? false,
         url: client.generateAuthUrl({
             access_type: "offline",
             prompt: "consent",
@@ -282,6 +337,8 @@ export const getStatus = async (
     ) {
         return {
             connected: false,
+            needsReconnect: false,
+            reconnectReason: null,
             email: null,
             lastSyncAt: null,
             watchExpiresAt: null,
@@ -295,21 +352,26 @@ export const getStatus = async (
         new Date();
 
     const watchActive =
+        !account.needsReconnect &&
         account.watchExpiresAt != null &&
         account.watchExpiresAt > now;
 
     return {
-        connected: true,
+        connected: !account.needsReconnect,
+        needsReconnect: account.needsReconnect,
+        reconnectReason: account.reconnectReason,
         email: account.email,
         lastSyncAt: account.lastSyncAt,
         watchExpiresAt:
         account.watchExpiresAt,
         watchActive,
         watchStatus:
-            watchActive
-                ? "ACTIVE"
-                : "EXPIRED",
-        autoImportEnabled: true,
+            account.needsReconnect
+                ? "RECONNECT_REQUIRED"
+                : watchActive
+                    ? "ACTIVE"
+                    : "EXPIRED",
+        autoImportEnabled: !account.needsReconnect,
     };
 
 };

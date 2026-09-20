@@ -1,8 +1,8 @@
-import {gmail_v1} from "googleapis";
+import {gmail_v1, google} from "googleapis";
 
 import {prisma} from "../../../database/prisma";
 import {ingestGmailEmail} from "./ingestion/transaction.ingestion";
-import {buildGmailQuery, createGmailClient, getConnectedGmailAccount,} from "./gmail.utils";
+import {buildGmailQuery, createGmailClient, createGoogleClient, getConnectedGmailAccount,} from "./gmail.utils";
 import {SyncGmailDTO} from "./gmail.dto";
 import {cleanEmailBody} from "./utils/body-cleaner";
 import {GmailReconnectRequiredError} from "../../../error/GmailReconnectRequiredError";
@@ -102,6 +102,14 @@ const getErrorReason = (
         : "";
 };
 
+/*
+ * Only a confirmed token revocation should force a reconnect.
+ * A bare 401/403 can also be a transient quota/rate-limit or
+ * permission blip on a single message, and treating those the
+ * same as revocation was disconnecting accounts (and wiping
+ * their sync checkpoint) on errors that would have cleared up
+ * on their own.
+ */
 const isAuthorizationError = (
     error: unknown,
 ): boolean => {
@@ -109,15 +117,15 @@ const isAuthorizationError = (
     const message = getErrorMessage(error);
     const reason = getErrorReason(error);
 
-    return (
-        status === 401 ||
-        status === 403 ||
+    const isRevoked =
         message.includes("invalid_grant") ||
         message.includes("invalid_token") ||
+        message.includes("unauthorized_client") ||
         reason.includes("invalid_grant") ||
         reason.includes("invalid_token") ||
-        reason.includes("unauthorized_client")
-    );
+        reason.includes("unauthorized_client");
+
+    return isRevoked || status === 401;
 };
 
 const retry = async <T>(
@@ -273,24 +281,45 @@ const handleAuthorizationError = async (
         },
     );
 
-    await prisma.$transaction([
-        prisma.user.update({
-            where: {
-                id: gmailAccount.userId,
-            },
-            data: {
-                gmailLastSyncAt:
-                    gmailAccount.lastSyncAt ??
-                    new Date(),
-            },
-        }),
+    try {
+        const client = createGoogleClient();
 
-        prisma.gmailAccount.delete({
-            where: {
-                id: gmailAccount.id,
-            },
-        }),
-    ]);
+        client.setCredentials({
+            refresh_token: gmailAccount.refreshToken,
+        });
+
+        await google.gmail({
+            version: "v1",
+            auth: client,
+        }).users.stop({
+            userId: "me",
+        });
+    } catch {
+        /*
+         * Best-effort: if the credentials are already revoked,
+         * Google will reject this too. Either way we still need
+         * to remove the local record below so stale push
+         * notifications stop resolving to a real account.
+         */
+    }
+
+    /*
+     * Flag the account rather than deleting it. historyId,
+     * refreshToken and watch state all stay put, so once the user
+     * reconnects the same row is reused and incremental sync
+     * resumes exactly where it left off — no backfill window, no
+     * risk of missed or duplicated transactions.
+     */
+    await prisma.gmailAccount.update({
+        where: {
+            id: gmailAccount.id,
+        },
+        data: {
+            needsReconnect: true,
+            reconnectReason: getErrorMessage(error) || getErrorReason(error) || "unknown",
+            watchExpiresAt: null,
+        },
+    });
 
     throw new GmailReconnectRequiredError();
 };
@@ -352,9 +381,69 @@ export const processMessage = async (
     });
 };
 
+/*
+ * A message that fails ingestion this many times in a row is
+ * quarantined: we stop retrying it and let the checkpoint move
+ * past it, so one persistently-bad message (a parser edge case, a
+ * transient DB issue that keeps recurring, ...) can't block every
+ * future sync for the account forever. It's still logged with its
+ * last error for manual follow-up.
+ */
+const MAX_MESSAGE_FAILURES = 3;
+
+/**
+ * Records an ingestion failure for a message and reports whether
+ * it has now failed enough times to be quarantined.
+ */
+const recordMessageFailure = async (
+    gmailAccountId: string,
+    messageId: string,
+    error: unknown,
+): Promise<boolean> => {
+    const lastError =
+        error instanceof Error
+            ? error.message
+            : String(error);
+
+    const record =
+        await prisma.gmailMessage.upsert({
+            where: {
+                gmailMessageId: messageId,
+            },
+            create: {
+                gmailMessageId: messageId,
+                gmailAccountId,
+                failedAttempts: 1,
+                lastError,
+            },
+            update: {
+                failedAttempts: {
+                    increment: 1,
+                },
+                lastError,
+            },
+        });
+
+    if (record.failedAttempts >= MAX_MESSAGE_FAILURES) {
+        await prisma.gmailMessage.update({
+            where: {
+                gmailMessageId: messageId,
+            },
+            data: {
+                quarantinedAt: new Date(),
+            },
+        });
+
+        return true;
+    }
+
+    return false;
+};
+
 const processMessages = async (
     gmail: gmail_v1.Gmail,
     userId: string,
+    gmailAccountId: string,
     messages: { id: string }[],
     label: "Initial" | "Incremental",
 ) => {
@@ -410,11 +499,30 @@ const processMessages = async (
                 error,
             );
 
+            const quarantined =
+                await recordMessageFailure(
+                    gmailAccountId,
+                    message.id,
+                    error,
+                );
+
+            if (quarantined) {
+                console.error(
+                    `[${label}] Quarantining message after ${MAX_MESSAGE_FAILURES} failed attempts; skipping`,
+                    {
+                        messageId: message.id,
+                    },
+                );
+
+                stats.skipped++;
+                continue;
+            }
+
             /*
-             * Do not continue.
-             *
-             * The checkpoint must not advance past
-             * a message that failed to ingest.
+             * Under the failure limit: do not continue. The
+             * checkpoint must not advance past a message that
+             * failed to ingest, so the whole batch is retried
+             * (this message included) on the next sync.
              */
             throw error;
         }
@@ -461,6 +569,37 @@ export const performInitialSync = async (
         },
     );
 
+    /*
+     * Snapshot historyId BEFORE listing/processing any messages,
+     * not after. If we captured it at the end instead, any message
+     * that arrived in the (potentially long, multi-page) window
+     * while this sync was running could fall through the gap: it
+     * wouldn't be in the already-executed `messages.list` results,
+     * and the next incremental sync only looks at history strictly
+     * after the saved checkpoint - so it would never be fetched at
+     * all. Snapshotting first guarantees anything that arrives
+     * during this sync is picked up by the following incremental
+     * sync instead.
+     */
+    const startProfile = await retry(
+        () =>
+            gmail.users
+                .getProfile({
+                    userId: "me",
+                })
+                .then(
+                    (result) =>
+                        result.data,
+                ),
+        "Load Gmail profile (start)",
+    );
+
+    if (!startProfile.historyId) {
+        throw new Error(
+            "Unable to determine Gmail historyId.",
+        );
+    }
+
     let pageToken =
         options.pageToken;
 
@@ -506,6 +645,7 @@ export const performInitialSync = async (
             await processMessages(
                 gmail,
                 userId,
+                gmailAccount.id,
                 messages,
                 "Initial",
             );
@@ -543,35 +683,15 @@ export const performInitialSync = async (
     } while (pageToken);
 
     /*
-     * ----------------------------------------------------------------------
-     * Only after ALL pages have been processed do we establish the
-     * checkpoint.
-     * ----------------------------------------------------------------------
+     * The checkpoint is the historyId captured BEFORE listing
+     * began (see above) - not one taken now, after all pages have
+     * been processed. Do not swap this for a fresh getProfile()
+     * call here.
      */
-
-    const profile = await retry(
-        () =>
-            gmail.users
-                .getProfile({
-                    userId: "me",
-                })
-                .then(
-                    (result) =>
-                        result.data,
-                ),
-        "Load Gmail profile",
-    );
-
-    if (!profile.historyId) {
-        throw new Error(
-            "Unable to determine Gmail historyId.",
-        );
-    }
-
     const lastSyncAt =
         await saveCheckpoint(
             gmailAccount.id,
-            profile.historyId,
+            startProfile.historyId,
         );
 
     return {
@@ -695,6 +815,7 @@ export const performIncrementalSync = async (
         await processMessages(
             gmail,
             userId,
+            gmailAccount.id,
             [...messageIds].map(
                 (id) => ({id}),
             ),

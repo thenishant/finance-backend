@@ -139,19 +139,19 @@ model MonthlyAnalytics {
 }
 
 model GmailAccount {
-  id             String         @id @default(uuid())
-  userId         String         @unique
-  email          String         @unique
-  refreshToken   String
-  accessToken    String?
-  expiresAt      DateTime?
-  lastSyncAt     DateTime?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
-  historyId      String?
-  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  messages       GmailMessage[]
-  watchExpiresAt DateTime?
+  id              String         @id @default(uuid())
+  userId          String         @unique
+  email           String         @unique
+  refreshToken    String
+  lastSyncAt      DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  historyId       String?
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages        GmailMessage[]
+  watchExpiresAt  DateTime?
+  needsReconnect  Boolean        @default(false)
+  reconnectReason String?
 }
 
 model GmailMessage {
@@ -160,10 +160,13 @@ model GmailMessage {
   gmailAccountId String
   sender         String?
   subject        String?
-  body           String
+  body           String?
   processed      Boolean      @default(false)
   createdAt      DateTime     @default(now())
   receivedAt     DateTime?
+  failedAttempts Int          @default(0)
+  lastError      String?
+  quarantinedAt  DateTime?
   gmailAccount   GmailAccount @relation(fields: [gmailAccountId], references: [id], onDelete: Cascade)
 
   @@index([gmailAccountId])

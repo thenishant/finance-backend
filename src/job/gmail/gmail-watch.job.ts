@@ -15,9 +15,17 @@ export const renewExpiringGmailWatches = async () => {
     const accounts =
         await prisma.gmailAccount.findMany({
             where: {
-                watchExpiresAt: {
-                    lte: renewBefore,
-                },
+                needsReconnect: false,
+                OR: [
+                    {
+                        watchExpiresAt: null,
+                    },
+                    {
+                        watchExpiresAt: {
+                            lte: renewBefore,
+                        },
+                    },
+                ],
             },
             orderBy: {
                 watchExpiresAt: "asc",
