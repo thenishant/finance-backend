@@ -29,19 +29,40 @@ export const startGmailWatch = async (
         Number(data.expiration),
     );
 
+    /*
+     * gmail.users.watch() always returns the mailbox's CURRENT
+     * historyId - not the historyId "as of last sync". Blindly
+     * writing it here would silently jump the sync checkpoint
+     * forward past anything that happened before this call (e.g.
+     * while the account was disconnected, or simply between the
+     * last sync and this watch renewal) - exactly what incremental
+     * sync exists to catch. So this only initializes historyId the
+     * first time (a brand-new account, or one where a full backfill
+     * already reset it) - a reconnect or a routine watch renewal on
+     * an account that already has a checkpoint leaves it alone.
+     */
     await prisma.gmailAccount.update({
         where: {
             id: gmailAccount.id,
         },
         data: {
-            historyId: data.historyId,
             watchExpiresAt,
+
+            ...(gmailAccount.historyId
+                ? {}
+                : {
+                    historyId:
+                    data.historyId,
+                }),
         },
     });
 
     console.info("[Gmail] Watch started", {
         email: gmailAccount.email,
-        historyId: data.historyId,
+        historyId:
+            gmailAccount.historyId ??
+            data.historyId,
+        preservedExistingHistoryId: Boolean(gmailAccount.historyId),
         expiresAt: watchExpiresAt,
     });
 
