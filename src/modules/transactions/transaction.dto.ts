@@ -153,6 +153,22 @@ export const transactionOrderSchema =
 export const getTransactionsQuerySchema =
     z.object({
 
+        year:
+            z.coerce
+                .number()
+                .int()
+                .min(2000)
+                .max(2100)
+                .optional(),
+
+        month:
+            z.coerce
+                .number()
+                .int()
+                .min(1)
+                .max(12)
+                .optional(),
+
         sortBy:
             transactionSortBySchema
                 .optional()
@@ -190,8 +206,21 @@ export const getTransactionsQuerySchema =
         to:
             z.string()
                 .optional(),
-    });
 
+    })
+        .refine(
+            query =>
+                query.year === undefined &&
+                query.month === undefined
+                    ? true
+                    : query.year !== undefined &&
+                    query.month !== undefined,
+            {
+                message:
+                    "year and month must be provided together",
+                path: ["year"],
+            },
+        );
 
 export type GetTransactionsQuery =
     z.infer<

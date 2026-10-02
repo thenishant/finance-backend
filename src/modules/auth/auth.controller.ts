@@ -7,6 +7,35 @@ import {AuthProvider} from "@prisma/client";
 import jwt from "jsonwebtoken";
 import {google} from "googleapis";
 import {generateGoogleState} from "../email/gmail/gmail.utils";
+import {getUserId} from "../../shared/utils/auth.utils";
+
+export const me = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const userId = getUserId(req);
+
+        const user = await prisma.user.findUnique({
+            where: {id: userId},
+            select: {
+                id: true,
+                email: true,
+                authProvider: true,
+                createdAt: true,
+            },
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false, error: {message: "User not found"}
+            });
+        }
+
+        res.json({
+            success: true, data: user,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
 
 export const register = async (req: Request, res: Response, next: NextFunction) => {
     try {

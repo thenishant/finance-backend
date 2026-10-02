@@ -2209,6 +2209,143 @@ describe("gmail.sync", () => {
 
     describe("syncMailbox", () => {
 
+        it("runs a date-range backfill instead of incremental/initial sync when `days` is given, and does not move the checkpoint", async () => {
+
+            mocks.gmailAccountFindUnique
+                .mockResolvedValue({
+                    id:
+                        "gmail-account-1",
+
+                    userId:
+                        "user-1",
+
+                    email:
+                        "user@gmail.com",
+
+                    refreshToken:
+                        "refresh-token",
+
+                    /*
+                     * Account already has a real checkpoint - a
+                     * `days` backfill must leave it exactly as-is.
+                     */
+                    historyId:
+                        "existing-checkpoint",
+
+                    lastSyncAt:
+                        new Date(
+                            "2026-09-01T00:00:00.000Z",
+                        ),
+                });
+
+            mocks.getConnectedGmailAccount
+                .mockResolvedValue({
+                    id:
+                        "gmail-account-1",
+
+                    userId:
+                        "user-1",
+
+                    email:
+                        "user@gmail.com",
+
+                    refreshToken:
+                        "refresh-token",
+
+                    historyId:
+                        "existing-checkpoint",
+
+                    lastSyncAt:
+                        new Date(
+                            "2026-09-01T00:00:00.000Z",
+                        ),
+                });
+
+            const messagesList =
+                vi.fn()
+                    .mockResolvedValue({
+                        data: {
+                            messages: [
+                                {
+                                    id:
+                                        "message-1",
+                                },
+                            ],
+
+                            nextPageToken:
+                                undefined,
+                        },
+                    });
+
+            mocks.createGmailClient
+                .mockReturnValue({
+                    users: {
+                        messages: {
+                            list:
+                                messagesList,
+
+                            get:
+                                vi.fn()
+                                    .mockResolvedValue({
+                                        data: {
+                                            payload: {
+                                                headers: [],
+
+                                                body: {
+                                                    data:
+                                                        Buffer
+                                                            .from(
+                                                                "test",
+                                                            )
+                                                            .toString(
+                                                                "base64",
+                                                            ),
+                                                },
+                                            },
+                                        },
+                                    }),
+                        },
+                    },
+                });
+
+            mocks.ingestGmailEmail
+                .mockResolvedValue({
+                    status:
+                        "created",
+
+                    transactionId:
+                        "transaction-1",
+                });
+
+            const result =
+                await syncMailbox(
+                    "user-1",
+                    {
+                        days: 15,
+                    },
+                );
+
+            expect(messagesList)
+                .toHaveBeenCalledTimes(1);
+
+            expect(result)
+                .toMatchObject({
+                    fetched: 1,
+                    transactionsCreated: 1,
+                    duplicates: 0,
+                    skipped: 0,
+                    nextPageToken: null,
+                });
+
+            /*
+             * The whole point: historyId/lastSyncAt must not be
+             * touched by a targeted backfill.
+             */
+            expect(
+                mocks.gmailAccountUpdate,
+            ).not.toHaveBeenCalled();
+        });
+
         it("performs an initial sync when historyId is missing", async () => {
 
             mocks.createGmailClient

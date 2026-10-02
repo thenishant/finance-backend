@@ -1,6 +1,6 @@
 import {gmail_v1} from "googleapis";
 
-import {createGmailClient, getConnectedGmailAccount, GMAIL_QUERY,} from "../modules/email/gmail/gmail.utils";
+import {buildGmailQuery, createGmailClient, getConnectedGmailAccount, GMAIL_QUERY,} from "../modules/email/gmail/gmail.utils";
 
 import {processMessage} from "../modules/email/gmail/gmail.sync";
 
@@ -21,8 +21,42 @@ const getArg = (
     return process.argv[index + 1];
 };
 
+const DAYS =
+    getArg("--days") !== undefined
+        ? Number(getArg("--days"))
+        : undefined;
+
+/*
+ * Shares buildGmailQuery with the `days` option on the /sync API
+ * (gmail.sync.ts's executeSyncMailbox), so "backfill the last N
+ * days" means exactly the same date window and overlap margin
+ * whichever entry point triggers it.
+ */
+const buildDefaultQuery = (): string => {
+    if (DAYS === undefined) {
+        return GMAIL_QUERY;
+    }
+
+    if (
+        !Number.isFinite(DAYS) ||
+        DAYS <= 0
+    ) {
+        throw new Error(
+            "--days must be a positive number",
+        );
+    }
+
+    return buildGmailQuery(
+        new Date(
+            Date.now() -
+            DAYS * 24 * 60 * 60 * 1000,
+        ),
+    );
+};
+
 const QUERY =
-    getArg("--query") ?? GMAIL_QUERY;
+    getArg("--query") ??
+    buildDefaultQuery();
 
 const MAX_RESULTS = Number(
     getArg("--max-results") ?? "10",

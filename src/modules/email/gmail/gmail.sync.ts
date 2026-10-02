@@ -381,20 +381,7 @@ export const processMessage = async (
     });
 };
 
-/*
- * A message that fails ingestion this many times in a row is
- * quarantined: we stop retrying it and let the checkpoint move
- * past it, so one persistently-bad message (a parser edge case, a
- * transient DB issue that keeps recurring, ...) can't block every
- * future sync for the account forever. It's still logged with its
- * last error for manual follow-up.
- */
 const MAX_MESSAGE_FAILURES = 3;
-
-/**
- * Records an ingestion failure for a message and reports whether
- * it has now failed enough times to be quarantined.
- */
 const recordMessageFailure = async (
     gmailAccountId: string,
     messageId: string,
@@ -445,7 +432,7 @@ const processMessages = async (
     userId: string,
     gmailAccountId: string,
     messages: { id: string }[],
-    label: "Initial" | "Incremental",
+    label: "Initial" | "Incremental" | "Backfill",
 ) => {
     const stats = {
         transactionsCreated: 0,
@@ -841,6 +828,104 @@ export const performIncrementalSync = async (
     };
 };
 
+export interface GmailBackfillStats {
+    fetched: number;
+    transactionsCreated: number;
+    duplicates: number;
+    skipped: number;
+}
+
+/**
+ * Re-scans a Gmail search query (typically a recent date window)
+ * and ingests anything found - WITHOUT touching historyId or
+ * lastSyncAt.
+ *
+ * This is deliberately separate from performInitialSync/
+ * performIncrementalSync, which both end by advancing the sync
+ * checkpoint. A targeted backfill must never do that: moving the
+ * checkpoint based on a search-query pass (rather than Gmail's
+ * own historyId ordering) risks skipping something the next
+ * regular incremental sync would otherwise have caught. Shared by
+ * the manual `days` sync option and the standalone backfill
+ * script, so there is exactly one implementation of "safely
+ * re-import a date range" to keep correct.
+ */
+export const performDateRangeBackfill = async (
+    gmail: gmail_v1.Gmail,
+    gmailAccount: GmailAccount,
+    userId: string,
+    query: string,
+): Promise<GmailBackfillStats> => {
+    const messageIds =
+        new Set<string>();
+
+    let pageToken:
+        string | undefined;
+
+    do {
+        const response = await retry(
+            () =>
+                gmail.users.messages
+                    .list({
+                        userId: "me",
+                        q: query,
+                        maxResults: 100,
+                        pageToken,
+                    })
+                    .then(
+                        (result) =>
+                            result.data,
+                    ),
+            "Date-range backfill",
+        );
+
+        for (
+            const message
+            of response.messages ?? []
+            ) {
+            if (message.id) {
+                messageIds.add(
+                    message.id,
+                );
+            }
+        }
+
+        pageToken =
+            response.nextPageToken ||
+            undefined;
+    } while (pageToken);
+
+    console.info(
+        "[Gmail] Date-range backfill",
+        {
+            userId,
+            query,
+            found: messageIds.size,
+        },
+    );
+
+    const stats =
+        await processMessages(
+            gmail,
+            userId,
+            gmailAccount.id,
+            [...messageIds].map(
+                (id) => ({id}),
+            ),
+            "Backfill",
+        );
+
+    return {
+        fetched: messageIds.size,
+        transactionsCreated:
+        stats.transactionsCreated,
+        duplicates:
+        stats.duplicates,
+        skipped:
+        stats.skipped,
+    };
+};
+
 export const syncMailbox = async (
     userId: string,
     options: SyncGmailDTO = {},
@@ -905,6 +990,66 @@ const executeSyncMailbox = async (
 
         let result:
             GmailSyncStats;
+
+        if (options.days !== undefined) {
+            try {
+                const backfillStats =
+                    await performDateRangeBackfill(
+                        gmail,
+                        gmailAccount,
+                        userId,
+                        buildGmailQuery(
+                            new Date(
+                                Date.now() -
+                                options.days *
+                                24 * 60 * 60 * 1000,
+                            ),
+                        ),
+                    );
+
+                result = {
+                    ...backfillStats,
+                    nextPageToken: null,
+                    /*
+                     * Informational only - a date-range backfill
+                     * deliberately does not persist a new
+                     * lastSyncAt/historyId checkpoint.
+                     */
+                    lastSyncAt:
+                        gmailAccount.lastSyncAt ??
+                        new Date(),
+                };
+            } catch (error) {
+                await handleAuthorizationError(
+                    gmailAccount,
+                    error,
+                );
+            }
+
+            console.info(
+                "[Gmail] Backfill completed",
+                {
+                    userId,
+                    email:
+                    gmailAccount.email,
+                    durationMs:
+                        Date.now() -
+                        startedAt,
+                    fetched:
+                    result!.fetched,
+                    created:
+                    result!
+                        .transactionsCreated,
+                    duplicates:
+                    result!
+                        .duplicates,
+                    skipped:
+                    result!.skipped,
+                },
+            );
+
+            return result!;
+        }
 
         try {
             result =
